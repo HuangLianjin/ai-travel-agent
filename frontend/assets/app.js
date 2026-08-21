@@ -1132,11 +1132,14 @@ createApp({
       if (t) this.guideDraft.city = t.city;
     },
     openGuideModal() {
+      this.releaseGuidePreviews();
+      this.guideDraft = { title: "", city: "", content: "", feelings: "", trip_id: "", images: [] };
       this.showGuideModal = true;
       this.$nextTick(() => lucide.createIcons());
     },
     closeGuideModal() {
       this.releaseGuidePreviews();
+      this.guideDraft = { title: "", city: "", content: "", feelings: "", trip_id: "", images: [] };
       this.showGuideModal = false;
     },
     openMyGuidesModal() {
@@ -1224,6 +1227,8 @@ createApp({
       } catch (e) {
         this.releaseAvatarPreview();
         alert(e.message);
+      } finally {
+        this.guideSaving = false;
       }
     },
     async likeGuide(guide) {
