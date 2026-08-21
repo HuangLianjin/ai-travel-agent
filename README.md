@@ -51,6 +51,15 @@ python -m app.eval.runner --output data/eval_report.json
 
 当前结果：pytest 11/11 通过；业务评测 24/24，主 Agent 评测 24/24。
 
+真实 20 城基准：20/20 成功，平均耗时 28.1s，P95 37.8s。
+
+## 架构与截图
+
+- 系统架构：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- 行程规划截图：`docs/screenshots/plan.png`
+- 攻略广场截图：`docs/screenshots/guides.png`
+- 管理后台截图：`docs/screenshots/admin.png`
+
 ## 文档
 
 - 上线执行手册：[docs/GO_LIVE_CHECKLIST.md](docs/GO_LIVE_CHECKLIST.md)

@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 def main() -> None:
     parser = argparse.ArgumentParser(description="生成 Agent 运行指标报告")
     parser.add_argument("--db", default=os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "travel.db")))
+    parser.add_argument("--user-id", type=int, default=None, help="只统计指定用户的运行记录")
     parser.add_argument("--output", default=str(PROJECT_ROOT / "data" / "usage_report.json"))
     parser.add_argument(
         "--input-price-per-1m",
@@ -32,9 +33,12 @@ def main() -> None:
 
     con = sqlite3.connect(args.db)
     con.row_factory = sqlite3.Row
+    where = " WHERE user_id = ?" if args.user_id is not None else ""
+    params = (args.user_id,) if args.user_id is not None else ()
     rows = con.execute(
         "SELECT intent, status, prompt_tokens, completion_tokens, latency_ms, created_at "
-        "FROM agent_runs ORDER BY created_at ASC"
+        "FROM agent_runs" + where + " ORDER BY created_at ASC",
+        params,
     ).fetchall()
     con.close()
 

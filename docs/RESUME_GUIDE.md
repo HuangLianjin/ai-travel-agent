@@ -37,3 +37,24 @@ AI 旅行规划平台（可在线演示）
 - 不要写“100% 真实价格”
 - 不要写“企业级上线”，除非真的部署了
 - 不要把 .env 里的 Key 写进简历
+
+
+## 五、真实运行数据（2026-08-21）
+
+基于 20 个城市真实行程生成基准：
+
+- 生成次数：20
+- 成功率：100%（20/20）
+- 平均耗时：28.1s
+- P95 耗时：37.8s
+- 总 Token：75,475
+- 预估成本：约 0.39 元（按 DeepSeek 价格估算）
+
+报告文件：`docs/bench_report.json`
+
+## 六、简历附件
+
+- 架构图：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- 行程规划截图：`docs/screenshots/plan.png`
+- 攻略广场截图：`docs/screenshots/guides.png`
+- 管理后台截图：`docs/screenshots/admin.png`
