@@ -1124,7 +1124,7 @@ def _make_transport_leg(
     leg = route_map.get((cur_title, nxt_title), {})
     mode = _mode_cn(leg.get("mode") or "auto")
     if leg:
-        minutes = min(int(leg.get("minutes") or 30), 40)
+        minutes = max(1, int(leg.get("minutes") or 30))
         cost = leg.get("cost_yuan")
         distance = leg.get("distance_km") or 0
         cost_source = "高德" if cost is not None else "估算"

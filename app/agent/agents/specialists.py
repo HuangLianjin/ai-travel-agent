@@ -480,6 +480,7 @@ class SynthesisAgent(BaseTravelAgent):
         plan = await self._clean_listing_names(plan, docs)
         plan = self._optimize_plan(plan, docs)
         plan = validate_plan(plan)
+        plan = await self._enrich_transport_legs(plan)
         if transport:
             plan["transport"] = transport
             plan = _merge_transport_legs(plan)
@@ -556,6 +557,91 @@ class SynthesisAgent(BaseTravelAgent):
                 }
             ),
         }
+
+    async def _enrich_transport_legs(
+        self, plan: dict[str, Any]
+    ) -> dict[str, Any]:
+        """按当天实际顺序补齐高德交通，覆盖景点和美食之间的全部路段。"""
+        if not self.map_mcp:
+            return plan
+        params = plan.get("params") or {}
+        preference = params.get("transport", "auto")
+        city = plan.get("city") or params.get("city") or ""
+        for day in plan.get("days", []) or []:
+            attractions = day.get("attractions", []) or []
+            dining = day.get("dining", []) or []
+            order: list[tuple[str, dict[str, Any]]] = []
+            lunch = dining[0] if dining else None
+            snack = dining[1] if len(dining) >= 2 else None
+            dinner = dining[2] if len(dining) >= 3 else None
+            extras = dining[3:]
+            if attractions:
+                order.append(("attraction", attractions[0]))
+            if lunch:
+                order.append(("food", lunch))
+            if len(attractions) >= 2:
+                order.append(("attraction", attractions[1]))
+            if snack:
+                order.append(("food", snack))
+            if len(attractions) >= 3:
+                order.append(("attraction", attractions[2]))
+            if dinner:
+                order.append(("food", dinner))
+            for f in extras:
+                order.append(("food", f))
+
+            for kind, item in order:
+                if item.get("lat") and item.get("lon"):
+                    continue
+                if kind == "food" and self.map_mcp:
+                    try:
+                        poi = await self.map_mcp.poi_detail(
+                            f"{city} {item.get('name', '')}", city
+                        )
+                    except Exception:
+                        poi = None
+                    if poi:
+                        item["lat"] = poi.get("lat") or item.get("lat")
+                        item["lon"] = poi.get("lon") or item.get("lon")
+                        item["address"] = poi.get("address") or item.get("address")
+
+            legs: list[dict[str, Any]] = []
+            for i in range(len(order) - 1):
+                _, origin = order[i]
+                _, destination = order[i + 1]
+                if not (origin.get("lat") and origin.get("lon")) or not (
+                    destination.get("lat") and destination.get("lon")
+                ):
+                    continue
+                try:
+                    leg = await self.map_mcp.smart_route(
+                        {
+                            "name": origin.get("name", ""),
+                            "lat": origin.get("lat"),
+                            "lon": origin.get("lon"),
+                            "city": city,
+                        },
+                        {
+                            "name": destination.get("name", ""),
+                            "lat": destination.get("lat"),
+                            "lon": destination.get("lon"),
+                            "city": city,
+                        },
+                        preference,
+                    )
+                except Exception:
+                    leg = {}
+                if leg:
+                    legs.append(
+                        {
+                            "from": origin.get("name", ""),
+                            "to": destination.get("name", ""),
+                            **leg,
+                        }
+                    )
+            if legs:
+                day["route"] = legs
+        return plan
 
     async def _clean_listing_names(
         self, plan: dict[str, Any], docs: list[dict[str, Any]]
