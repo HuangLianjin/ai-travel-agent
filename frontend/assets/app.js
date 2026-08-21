@@ -718,6 +718,15 @@ createApp({
     toLocalDate(d) {
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     },
+    formatSubmitTime(iso) {
+      if (!iso) return "";
+      return String(iso)
+        .replace("T", " ")
+        .replace(/\+00:00$/, "")
+        .replace(/\+08:00$/, "")
+        .replace(/Z$/, "")
+        .slice(0, 19);
+    },
     formatDateTime(iso) {
       if (!iso) return "";
       const d = new Date(iso);
@@ -1587,7 +1596,7 @@ createApp({
                   <span v-if="g.trip_id" class="tag">含行程</span>
                   <span class="status" :class="g.status">{{ statusText(g.status) }}</span>
                 </div>
-                <div class="small muted">上传时间：{{ formatDateTime(g.created_at) }}</div>
+                <div class="small muted">上传时间：{{ formatSubmitTime(g.created_at) }}</div>
                 <div class="small" style="margin-top:6px;white-space:pre-wrap">{{ g.content }}</div>
                 <div v-if="g.images && g.images.length" class="guide-images">
                   <img v-for="src in g.images" :key="src" :src="src" alt="攻略图片" />
@@ -1611,7 +1620,7 @@ createApp({
                       <img v-if="viewGuide.author_avatar" :src="viewGuide.author_avatar" class="mini-avatar" />
                       {{ viewGuide.author_nickname || viewGuide.username || "用户" }}
                     </span>
-                    · {{ viewGuide.city }} · {{ viewGuide.created_at }}
+                    · {{ viewGuide.city }} · {{ formatSubmitTime(viewGuide.created_at) }}
                   </div>
                   <div v-if="viewGuide.user_id && (!profile || viewGuide.user_id !== profile.id)" style="margin-top:8px;display:flex;align-items:center;gap:10px">
                     <button class="btn sm" :class="{primary:viewGuide.is_following}" @click="toggleFollow(viewGuide)" :disabled="followSaving">
@@ -1650,7 +1659,7 @@ createApp({
                 <div v-if="!viewGuide.comments || viewGuide.comments.length===0" class="small muted">还没有评论</div>
                 <div v-for="cm in viewGuide.comments" :key="cm.id" class="comment-item">
                   <div class="small">{{ cm.content }}</div>
-                  <div class="small muted">{{ cm.created_at }}</div>
+                  <div class="small muted">{{ formatSubmitTime(cm.created_at) }}</div>
                 </div>
                 <div style="display:flex;gap:8px;margin-top:10px">
                   <input v-model="guideComment" placeholder="写下你的评论" @keydown.enter.exact.prevent="addGuideComment" />
@@ -1831,7 +1840,7 @@ createApp({
                   <td>{{ r.status }}</td>
                   <td>{{ (r.prompt_tokens || 0) + (r.completion_tokens || 0) }}</td>
                   <td>{{ r.latency_ms }}ms</td>
-                  <td class="small">{{ formatDateTime(r.created_at) }}</td>
+                  <td class="small">{{ formatSubmitTime(r.created_at) }}</td>
                 </tr>
               </table>
             </div>
@@ -1885,7 +1894,7 @@ createApp({
                 <table class="table">
                   <tr><th>时间</th><th>动作</th><th>对象</th><th>详情</th></tr>
                   <tr v-for="a in auditLogs" :key="a.id">
-                    <td>{{ a.created_at }}</td><td>{{ a.action }}</td><td>{{ a.target_type }} {{ a.target_id }}</td><td>{{ a.detail }}</td>
+                    <td>{{ formatSubmitTime(a.created_at) }}</td><td>{{ a.action }}</td><td>{{ a.target_type }} {{ a.target_id }}</td><td>{{ a.detail }}</td>
                   </tr>
                 </table>
               </div>
@@ -1903,7 +1912,7 @@ createApp({
                 <table class="table" style="margin-top:10px">
                   <tr><th>地点</th><th>城市</th><th>价格</th><th>来源</th><th>更新时间</th><th>操作</th></tr>
                   <tr v-for="p in priceReferences" :key="p.id">
-                    <td>{{ p.place_name }}</td><td>{{ p.city }}</td><td>¥{{ p.price }}</td><td>{{ p.source }}</td><td>{{ formatDateTime(p.updated_at) }}</td>
+                    <td>{{ p.place_name }}</td><td>{{ p.city }}</td><td>¥{{ p.price }}</td><td>{{ p.source }}</td><td>{{ formatSubmitTime(p.updated_at) }}</td>
                     <td><button class="btn sm danger" @click="deletePrice(p.id)">删除</button></td>
                   </tr>
                 </table>
