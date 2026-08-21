@@ -1499,7 +1499,10 @@ class Database:
             params.append(target_type)
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
-        sql += " ORDER BY created_at DESC"
+        sql += (
+            " ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, "
+            "created_at DESC"
+        )
         return self.query_all(sql, tuple(params))
 
     def decide_review(
