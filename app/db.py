@@ -169,6 +169,15 @@ class Database:
                     detail TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS verification_codes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS recommend_slots (
                     slot TEXT PRIMARY KEY,
                     guide_id TEXT NOT NULL DEFAULT '',
@@ -243,6 +252,8 @@ class Database:
                 ("avatar", "TEXT NOT NULL DEFAULT ''"),
                 ("email", "TEXT NOT NULL DEFAULT ''"),
                 ("email_verified", "INTEGER NOT NULL DEFAULT 0"),
+                ("phone", "TEXT NOT NULL DEFAULT ''"),
+                ("phone_verified", "INTEGER NOT NULL DEFAULT 0"),
                 ("verification_code", "TEXT NOT NULL DEFAULT ''"),
                 ("verification_expires_at", "TEXT NOT NULL DEFAULT ''"),
                 ("login_failed_count", "INTEGER NOT NULL DEFAULT 0"),
@@ -276,11 +287,19 @@ class Database:
                 role="user",
                 email="demo@example.com",
                 email_verified=1,
+                phone="13800000000",
+                phone_verified=1,
             )
         demo = self.get_user_by_username("demo")
         if demo and not demo.get("email"):
             self.execute(
                 "UPDATE users SET email = 'demo@example.com', email_verified = 1 "
+                "WHERE id = ?",
+                (demo["id"],),
+            )
+        if demo and not demo.get("phone"):
+            self.execute(
+                "UPDATE users SET phone = '13800000000', phone_verified = 1 "
                 "WHERE id = ?",
                 (demo["id"],),
             )
@@ -291,6 +310,12 @@ class Database:
                 "WHERE id = ?",
                 (admin["id"],),
             )
+        if admin and not admin.get("phone"):
+            self.execute(
+                "UPDATE users SET phone = '13900000000', phone_verified = 1 "
+                "WHERE id = ?",
+                (admin["id"],),
+            )
         if not admin and settings.admin_init_password:
             self.create_user(
                 "admin",
@@ -298,6 +323,8 @@ class Database:
                 role="super_admin",
                 email="admin@example.com",
                 email_verified=1,
+                phone="13900000000",
+                phone_verified=1,
                 must_change_password=1,
             )
         elif (
@@ -320,11 +347,13 @@ class Database:
         email: str = "",
         email_verified: int = 0,
         must_change_password: int = 0,
+        phone: str = "",
+        phone_verified: int = 0,
     ) -> int:
         return self.execute(
             "INSERT INTO users (username, password_hash, role, status, created_at, "
-            "email, email_verified, must_change_password) "
-            "VALUES (?, ?, ?, 'active', ?, ?, ?, ?)",
+            "email, email_verified, must_change_password, phone, phone_verified) "
+            "VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)",
             (
                 username,
                 hash_password(password),
@@ -333,6 +362,8 @@ class Database:
                 email,
                 email_verified,
                 must_change_password,
+                phone,
+                phone_verified,
             ),
         )
 
@@ -343,6 +374,12 @@ class Database:
         return self.query_one(
             "SELECT * FROM users WHERE email = ? AND email != ''",
             (email.lower(),),
+        )
+
+    def get_user_by_phone(self, phone: str) -> dict | None:
+        return self.query_one(
+            "SELECT * FROM users WHERE phone = ? AND phone != ''",
+            (phone,),
         )
 
     def get_user_by_id(self, user_id: int) -> dict | None:
@@ -364,6 +401,37 @@ class Database:
     def set_email_verified(self, user_id: int) -> None:
         self.execute(
             "UPDATE users SET email_verified = 1 WHERE id = ?", (user_id,)
+        )
+
+    def set_phone_verified(self, user_id: int) -> None:
+        self.execute(
+            "UPDATE users SET phone_verified = 1 WHERE id = ?", (user_id,)
+        )
+
+    def save_verification_code(
+        self, phone: str, purpose: str, code: str, expires_at: str
+    ) -> int:
+        self.execute(
+            "UPDATE verification_codes SET used = 1 "
+            "WHERE phone = ? AND purpose = ? AND used = 0",
+            (phone, purpose),
+        )
+        return self.execute(
+            "INSERT INTO verification_codes (phone, purpose, code, expires_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (phone, purpose, code, expires_at, _now()),
+        )
+
+    def get_verification_code(self, phone: str, purpose: str) -> dict | None:
+        return self.query_one(
+            "SELECT * FROM verification_codes WHERE phone = ? AND purpose = ? "
+            "AND used = 0 ORDER BY id DESC LIMIT 1",
+            (phone, purpose),
+        )
+
+    def mark_code_used(self, code_id: int) -> None:
+        self.execute(
+            "UPDATE verification_codes SET used = 1 WHERE id = ?", (code_id,)
         )
 
     def set_verification_code(self, user_id: int, code: str, expires_at: str) -> None:
@@ -484,7 +552,7 @@ class Database:
         self, user_id: int, viewer_id: int | None = None
     ) -> dict | None:
         user = self.query_one(
-            "SELECT id, username, nickname, avatar, email_verified, totp_secret "
+            "SELECT id, username, nickname, avatar, email_verified, totp_secret, phone "
             "FROM users WHERE id = ?",
             (user_id,),
         )
@@ -514,6 +582,8 @@ class Database:
             "totp_enabled": bool(user.get("totp_secret")) if viewer_id == user_id else False,
         }
         result.pop("totp_secret", None)
+        if viewer_id != user_id:
+            result.pop("phone", None)
         return result
 
     def follow_user(self, follower_id: int, followee_id: int, follow: bool) -> None:

@@ -42,11 +42,12 @@ from app.schemas import (
     RegisterRequest,
     ResetPasswordRequest,
     ReviewDecision,
+    SendCodeRequest,
     TotpEnableRequest,
     TotpRequest,
-    VerifyEmailRequest,
+    VerifyPhoneRequest,
 )
-from app.mailer import send_code_email
+from app.sms import send_sms_code
 from app.security import (
     create_access_token,
     create_refresh_token,
@@ -79,7 +80,7 @@ def _rate_limit(key: str) -> None:
     bucket.append(now)
 
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 
 
 def _client_ip(request: Request) -> str:
@@ -109,6 +110,31 @@ def _is_locked(user: dict) -> bool:
         return False
 
 
+@router.post("/auth/send-code")
+async def send_code(
+    req: SendCodeRequest,
+    request: Request,
+    db: Database = Depends(get_db),
+):
+    settings = get_settings()
+    phone = req.phone.strip()
+    purpose = req.purpose.strip()
+    if purpose not in ("register", "reset", "verify"):
+        raise HTTPException(status_code=400, detail="无效的验证码用途")
+    if not _PHONE_RE.match(phone):
+        raise HTTPException(status_code=400, detail="手机号格式不正确")
+    _rate_limit_window(f"phone_code:{phone}", settings.phone_code_per_minute, 60)
+    _rate_limit_window(f"phone_code_ip:{_client_ip(request)}", 10, 3600)
+    code = generate_verification_code()
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(
+        timespec="seconds"
+    )
+    db.save_verification_code(phone, purpose, code, expires)
+    sent = send_sms_code(phone, code, purpose)
+    audit(db, None, "send_code", "phone", phone, purpose)
+    return {"status": "ok", "sms_sent": sent}
+
+
 @router.post("/auth/register")
 async def register(
     req: RegisterRequest,
@@ -117,27 +143,29 @@ async def register(
 ):
     settings = get_settings()
     _rate_limit_window(
-        f"register:{_client_ip(request)}", settings.auth_register_per_hour, 3600
+        f"register:{_client_ip(request)}", settings.phone_register_per_hour, 3600
     )
     username = req.username.strip()
-    email = req.email.strip().lower()
-    if not _EMAIL_RE.match(email):
-        raise HTTPException(status_code=400, detail="邮箱格式不正确")
+    phone = req.phone.strip()
+    if not _PHONE_RE.match(phone):
+        raise HTTPException(status_code=400, detail="手机号格式不正确")
     if db.get_user_by_username(username):
         raise HTTPException(status_code=409, detail="用户名已存在")
-    if db.get_user_by_email(email):
-        raise HTTPException(status_code=409, detail="邮箱已被注册")
+    if db.get_user_by_phone(phone):
+        raise HTTPException(status_code=409, detail="手机号已注册")
     try:
         validate_password_policy(username, req.password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    code = generate_verification_code()
-    expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(
-        timespec="seconds"
-    )
-    user_id = db.create_user(username, req.password, email=email, email_verified=0)
-    db.set_verification_code(user_id, code, expires)
-    sent = send_code_email(email, code, "verify")
+    row = db.get_verification_code(phone, "register")
+    if (
+        not row
+        or row["code"] != req.code.strip()
+        or row["expires_at"] < datetime.now(timezone.utc).isoformat(timespec="seconds")
+    ):
+        raise HTTPException(status_code=400, detail="验证码错误或已过期")
+    user_id = db.create_user(username, req.password, phone=phone, phone_verified=1)
+    db.mark_code_used(row["id"])
     audit(db, user_id, "register", detail=username)
     db.record_login_audit(
         username,
@@ -146,30 +174,30 @@ async def register(
         request.headers.get("user-agent", ""),
         "register",
     )
-    return {"status": "ok", "email_sent": sent}
+    return {"status": "ok"}
 
 
-@router.post("/auth/verify-email")
-async def verify_email(
-    req: VerifyEmailRequest,
+@router.post("/auth/verify-phone")
+async def verify_phone(
+    req: VerifyPhoneRequest,
     db: Database = Depends(get_db),
+    user: dict = Depends(get_current_user),
 ):
-    user = db.get_user_by_username(req.username.strip())
-    if not user:
-        raise HTTPException(status_code=400, detail="用户不存在")
-    if user.get("email_verified"):
+    phone = user.get("phone") or ""
+    if not phone:
+        raise HTTPException(status_code=400, detail="请先绑定手机号")
+    if user.get("phone_verified"):
         return {"status": "ok"}
-    if not user.get("verification_code") or not user.get("verification_expires_at"):
-        raise HTTPException(status_code=400, detail="验证码不存在或已失效")
-    if user["verification_expires_at"] < datetime.now(timezone.utc).isoformat(
-        timespec="seconds"
+    row = db.get_verification_code(phone, "verify")
+    if (
+        not row
+        or row["code"] != req.code.strip()
+        or row["expires_at"] < datetime.now(timezone.utc).isoformat(timespec="seconds")
     ):
-        raise HTTPException(status_code=400, detail="验证码已过期")
-    if req.code.strip() != user["verification_code"]:
-        raise HTTPException(status_code=400, detail="验证码错误")
-    db.set_email_verified(user["id"])
-    db.set_verification_code(user["id"], "", "")
-    audit(db, user["id"], "verify_email", detail=user["username"])
+        raise HTTPException(status_code=400, detail="验证码错误或已过期")
+    db.set_phone_verified(user["id"])
+    db.mark_code_used(row["id"])
+    audit(db, user["id"], "verify_phone", "phone", phone)
     return {"status": "ok"}
 
 
@@ -220,11 +248,13 @@ async def login(
         "refresh_token": refresh_plain,
         "token_type": "bearer",
         "email_verified": bool(user.get("email_verified")),
+        "phone_verified": bool(user.get("phone_verified")),
         "must_change_password": bool(user.get("must_change_password")),
         "user": {
             "id": user["id"],
             "username": user["username"],
             "role": user["role"],
+            "phone": user.get("phone") or "",
         },
     }
 
@@ -292,15 +322,17 @@ async def forgot_password(
 ):
     settings = get_settings()
     _rate_limit_window(f"forgot:{_client_ip(request)}", 3, 3600)
-    email = req.email.strip().lower()
-    user = db.get_user_by_email(email)
+    phone = req.phone.strip()
+    if not _PHONE_RE.match(phone):
+        raise HTTPException(status_code=400, detail="手机号格式不正确")
+    user = db.get_user_by_phone(phone)
     if user:
         code = generate_verification_code()
         expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(
             timespec="seconds"
         )
-        db.set_verification_code(user["id"], code, expires)
-        send_code_email(email, code, "reset")
+        db.save_verification_code(phone, "reset", code, expires)
+        send_sms_code(phone, code, "reset")
         db.record_login_audit(
             user["username"],
             True,
@@ -316,21 +348,23 @@ async def reset_password(
     req: ResetPasswordRequest,
     db: Database = Depends(get_db),
 ):
-    user = db.get_user_by_email(req.email.strip().lower())
+    phone = req.phone.strip()
+    user = db.get_user_by_phone(phone)
     if not user:
         raise HTTPException(status_code=400, detail="用户不存在")
-    if not user.get("verification_code") or user["verification_expires_at"] < datetime.now(
-        timezone.utc
-    ).isoformat(timespec="seconds"):
-        raise HTTPException(status_code=400, detail="验证码已过期")
-    if req.code.strip() != user["verification_code"]:
-        raise HTTPException(status_code=400, detail="验证码错误")
+    row = db.get_verification_code(phone, "reset")
+    if (
+        not row
+        or row["code"] != req.code.strip()
+        or row["expires_at"] < datetime.now(timezone.utc).isoformat(timespec="seconds")
+    ):
+        raise HTTPException(status_code=400, detail="验证码错误或已过期")
     try:
         validate_password_policy(user["username"], req.new_password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.update_password(user["id"], hash_password(req.new_password))
-    db.set_verification_code(user["id"], "", "")
+    db.mark_code_used(row["id"])
     db.revoke_all_user_refresh_tokens(user["id"])
     audit(db, user["id"], "reset_password")
     return {"status": "ok"}

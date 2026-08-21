@@ -60,15 +60,16 @@ createApp({
       authMode: "login",
       authUsername: "",
       authPassword: "",
-      authEmail: "",
+      authPhone: "",
       authConfirm: "",
       authCode: "",
+      codeSending: false,
       authError: "",
       authNotice: "",
       show2fa: false,
       twofaCode: "",
-      verifyEmailModal: false,
-      verifyEmailCode: "",
+      verifyPhoneModal: false,
+      verifyPhoneCode: "",
       securityModal: false,
       securityTab: "password",
       forcePasswordChange: false,
@@ -289,8 +290,8 @@ createApp({
         if (data.must_change_password) {
           this.forcePasswordChange = true;
           this.openSecurityModal("password");
-        } else if (!data.email_verified) {
-          this.verifyEmailModal = true;
+        } else if (!(data.phone_verified || data.email_verified)) {
+          this.verifyPhoneModal = true;
         } else if (this.isAdmin) {
           this.view = "admin";
           this.loadAdmin();
@@ -303,6 +304,21 @@ createApp({
         this.authError = e.message;
       }
     },
+    async sendRegisterCode() {
+      try {
+        this.authError = "";
+        this.codeSending = true;
+        await request("/auth/send-code", {
+          method: "POST",
+          body: JSON.stringify({ phone: this.authPhone, purpose: "register" }),
+        });
+        this.authNotice = "验证码已发送（本地开发模式见服务端日志）";
+      } catch (e) {
+        this.authError = e.message;
+      } finally {
+        this.codeSending = false;
+      }
+    },
     async register() {
       try {
         this.authError = "";
@@ -310,39 +326,50 @@ createApp({
           this.authError = "两次输入的密码不一致";
           return;
         }
-        const data = await request("/auth/register", {
+        await request("/auth/register", {
           method: "POST",
           body: JSON.stringify({
             username: this.authUsername,
             password: this.authPassword,
-            email: this.authEmail,
+            phone: this.authPhone,
+            code: this.authCode,
           }),
         });
         this.authMode = "login";
-        this.authNotice = data.email_sent
-          ? "注册成功，验证码已发送到邮箱"
-          : "注册成功，本地开发模式验证码见服务端日志";
+        this.authNotice = "注册成功，请登录";
         this.authUsername = "";
         this.authPassword = "";
         this.authConfirm = "";
+        this.authCode = "";
       } catch (e) {
         this.releaseAvatarPreview();
         this.authError = e.message;
       }
     },
-    async verifyEmail() {
+    async sendVerifyPhoneCode() {
       try {
         this.authError = "";
-        await request("/auth/verify-email", {
+        const phone = (this.user && this.user.phone) || (this.profile && this.profile.phone) || "";
+        await request("/auth/send-code", {
           method: "POST",
-          body: JSON.stringify({
-            username: this.user.username,
-            code: this.verifyEmailCode,
-          }),
+          body: JSON.stringify({ phone, purpose: "verify" }),
         });
-        this.verifyEmailModal = false;
-        this.verifyEmailCode = "";
-        this.toastMsg("邮箱验证成功");
+        this.toastMsg("验证码已发送");
+      } catch (e) {
+        this.releaseAvatarPreview();
+        this.authError = e.message;
+      }
+    },
+    async verifyPhone() {
+      try {
+        this.authError = "";
+        await request("/auth/verify-phone", {
+          method: "POST",
+          body: JSON.stringify({ code: this.verifyPhoneCode }),
+        });
+        this.verifyPhoneModal = false;
+        this.verifyPhoneCode = "";
+        this.toastMsg("手机号验证成功");
         if (this.isAdmin) {
           this.view = "admin";
           this.loadAdmin();
@@ -354,15 +381,30 @@ createApp({
         this.authError = e.message;
       }
     },
+    async sendResetCode() {
+      try {
+        this.authError = "";
+        this.codeSending = true;
+        await request("/auth/send-code", {
+          method: "POST",
+          body: JSON.stringify({ phone: this.authPhone, purpose: "reset" }),
+        });
+        this.authNotice = "验证码已发送（本地开发模式见服务端日志）";
+      } catch (e) {
+        this.authError = e.message;
+      } finally {
+        this.codeSending = false;
+      }
+    },
     async forgotPassword() {
       try {
         this.authError = "";
         await request("/auth/forgot-password", {
           method: "POST",
-          body: JSON.stringify({ email: this.authEmail }),
+          body: JSON.stringify({ phone: this.authPhone }),
         });
         this.authMode = "reset";
-        this.authNotice = "如果该邮箱已注册，验证码已发送";
+        this.authNotice = "如果该手机号已注册，验证码已发送";
       } catch (e) {
         this.releaseAvatarPreview();
         this.authError = e.message;
@@ -378,7 +420,7 @@ createApp({
         await request("/auth/reset-password", {
           method: "POST",
           body: JSON.stringify({
-            email: this.authEmail,
+            phone: this.authPhone,
             code: this.authCode,
             new_password: this.authPassword,
           }),
@@ -1141,16 +1183,24 @@ createApp({
 
         <div v-else-if="authMode === 'register'">
           <div class="field"><label>用户名</label><input v-model="authUsername" maxlength="32" /></div>
-          <div class="field"><label>邮箱</label><input v-model="authEmail" type="email" /></div>
+          <div class="field"><label>手机号</label><input v-model="authPhone" maxlength="11" /></div>
+          <div class="field">
+            <label>验证码</label>
+            <div style="display:flex;gap:8px">
+              <input v-model="authCode" placeholder="6 位验证码" />
+              <button class="btn sm" @click="sendRegisterCode" :disabled="codeSending">{{ codeSending ? '发送中' : '获取验证码' }}</button>
+            </div>
+          </div>
           <div class="field"><label>密码（8 位以上，含字母和数字）</label><input v-model="authPassword" type="password" /></div>
           <div class="field"><label>确认密码</label><input v-model="authConfirm" type="password" /></div>
           <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
+          <p v-if="authNotice" class="small muted" style="margin:6px 0">{{ authNotice }}</p>
           <button class="btn primary block" @click="register">注册</button>
           <button class="btn block" style="margin-top:8px" @click="authMode='login'">返回登录</button>
         </div>
 
         <div v-else-if="authMode === 'forgot'">
-          <div class="field"><label>邮箱</label><input v-model="authEmail" type="email" /></div>
+          <div class="field"><label>手机号</label><input v-model="authPhone" maxlength="11" /></div>
           <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
           <p v-if="authNotice" class="small muted" style="margin:6px 0">{{ authNotice }}</p>
           <button class="btn primary block" @click="forgotPassword">发送验证码</button>
@@ -1158,7 +1208,7 @@ createApp({
         </div>
 
         <div v-else>
-          <div class="field"><label>邮箱</label><input v-model="authEmail" type="email" /></div>
+          <div class="field"><label>手机号</label><input v-model="authPhone" maxlength="11" /></div>
           <div class="field"><label>验证码</label><input v-model="authCode" /></div>
           <div class="field"><label>新密码（8 位以上，含字母和数字）</label><input v-model="authPassword" type="password" /></div>
           <div class="field"><label>确认新密码</label><input v-model="authConfirm" type="password" /></div>
@@ -1544,15 +1594,21 @@ createApp({
             </div>
           </div>
 
-          <div v-if="verifyEmailModal" class="modal-mask" @click.self="verifyEmailModal=false">
+          <div v-if="verifyPhoneModal" class="modal-mask" @click.self="verifyPhoneModal=false">
             <div class="modal">
-              <h3 style="margin:0">邮箱验证</h3>
-              <p class="small muted" style="margin-top:8px">验证后才能生成行程和发布攻略。验证码见邮箱；本地开发模式见服务端日志。</p>
-              <div class="field"><label>验证码</label><input v-model="verifyEmailCode" /></div>
+              <h3 style="margin:0">手机号验证</h3>
+              <p class="small muted" style="margin-top:8px">验证后才能生成行程和发布攻略。验证码已发送到手机；本地开发模式见服务端日志。</p>
+              <div class="field">
+                <label>验证码</label>
+                <div style="display:flex;gap:8px">
+                  <input v-model="verifyPhoneCode" placeholder="6 位验证码" />
+                  <button class="btn sm" @click="sendVerifyPhoneCode" :disabled="codeSending">{{ codeSending ? '发送中' : '获取验证码' }}</button>
+                </div>
+              </div>
               <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
               <div class="action-row">
-                <button class="btn sm" @click="verifyEmailModal=false">稍后</button>
-                <button class="btn primary sm" @click="verifyEmail">验证</button>
+                <button class="btn sm" @click="verifyPhoneModal=false">稍后</button>
+                <button class="btn primary sm" @click="verifyPhone">验证</button>
               </div>
             </div>
           </div>

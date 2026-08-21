@@ -49,13 +49,32 @@ def test_refresh_token_hash_and_revoke(tmp_path):
     assert db.get_refresh_token(token_hash) is None
 
 
+def test_phone_verification_code_flow(tmp_path):
+    db = Database(str(tmp_path / "phone.db"))
+    db.init_db()
+    db.save_verification_code(
+        "13800000000", "register", "123456", "2099-01-01T00:00:00+00:00"
+    )
+    row = db.get_verification_code("13800000000", "register")
+    assert row and row["code"] == "123456"
+    db.mark_code_used(row["id"])
+    assert db.get_verification_code("13800000000", "register") is None
+
+
 def test_new_database_has_no_default_admin(tmp_path):
     db = Database(str(tmp_path / "secure.db"))
     db.init_db()
     assert db.get_user_by_username("admin") is None
     assert db.get_user_by_username("demo") is None
     cols = {row["name"] for row in db.query_all("PRAGMA table_info(users)")}
-    assert {"email", "email_verified", "totp_secret", "must_change_password"} <= cols
+    assert {
+        "email",
+        "email_verified",
+        "phone",
+        "phone_verified",
+        "totp_secret",
+        "must_change_password",
+    } <= cols
     tables = {
         row["name"]
         for row in db.query_all(

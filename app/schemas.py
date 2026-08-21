@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=32)
     password: str = Field(min_length=8, max_length=64)
-    email: str
+    phone: str
+    code: str
 
 
 class LoginRequest(BaseModel):
@@ -17,8 +18,12 @@ class LoginRequest(BaseModel):
     totp_code: str = ""
 
 
-class VerifyEmailRequest(BaseModel):
-    username: str
+class SendCodeRequest(BaseModel):
+    phone: str
+    purpose: str = "register"
+
+
+class VerifyPhoneRequest(BaseModel):
     code: str
 
 
@@ -32,11 +37,11 @@ class ChangePasswordRequest(BaseModel):
 
 
 class ForgotPasswordRequest(BaseModel):
-    email: str
+    phone: str
 
 
 class ResetPasswordRequest(BaseModel):
-    email: str
+    phone: str
     code: str
     new_password: str = Field(min_length=8, max_length=64)
 

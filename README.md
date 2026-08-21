@@ -99,4 +99,4 @@ python -m app.eval.runner --output data/eval_report.json
 
 - `.env` 和 `data/` 已在 .gitignore 中，上传 GitHub 时不会包含真实 Key 和数据库。
 - 一键启动会生成 `.env`，默认 `LLM_MODE=demo`；需要真实规划时填入 DeepSeek/OpenAI 与搜索 Key。
-- 安全加固：注册需邮箱验证，登录限流与失败锁定，管理员由 `ADMIN_INIT_PASSWORD` 创建并强制首次改密，支持 TOTP 2FA。
+- 安全加固：注册需手机号验证码，登录限流与失败锁定，管理员由 `ADMIN_INIT_PASSWORD` 创建并强制首次改密，支持 TOTP 2FA。

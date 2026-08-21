@@ -82,6 +82,15 @@ class Settings:
     auth_login_per_hour: int = int(os.getenv("AUTH_LOGIN_PER_HOUR", "10"))
     totp_issuer: str = os.getenv("TOTP_ISSUER", "星旅 Agent")
 
+    # 手机号验证码（未配置短信服务商时验证码打印到服务端日志）
+    sms_provider: str = os.getenv("SMS_PROVIDER", "log")
+    sms_access_key: str = os.getenv("SMS_ACCESS_KEY", "")
+    sms_secret_key: str = os.getenv("SMS_SECRET_KEY", "")
+    sms_sign_name: str = os.getenv("SMS_SIGN_NAME", "星旅 Agent")
+    sms_template_code: str = os.getenv("SMS_TEMPLATE_CODE", "")
+    phone_register_per_hour: int = int(os.getenv("PHONE_REGISTER_PER_HOUR", "5"))
+    phone_code_per_minute: int = int(os.getenv("PHONE_CODE_PER_MINUTE", "1"))
+
     # 邮件验证（本地未配置时验证码打印到服务端日志）
     mail_enabled: bool = _as_bool(os.getenv("MAIL_ENABLED", "false"), False)
     smtp_host: str = os.getenv("SMTP_HOST", "")

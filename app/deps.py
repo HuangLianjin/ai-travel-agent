@@ -42,8 +42,8 @@ def get_current_user(
 def require_verified(
     user: dict = Depends(get_current_user),
 ) -> dict:
-    if not user.get("email_verified"):
-        raise HTTPException(status_code=403, detail="请先完成邮箱验证")
+    if not (user.get("phone_verified") or user.get("email_verified")):
+        raise HTTPException(status_code=403, detail="请先完成手机号验证")
     return user
 
 
