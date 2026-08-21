@@ -13,6 +13,7 @@ from app.agent.agents.specialists import (
 
 __all__ = [
     "MainAgent",
+    "ReflectionAgent",
     "AttractionAgent",
     "FoodAgent",
     "TransportAgent",

@@ -7,7 +7,7 @@
 证据：
 - `app/services/planner.py`：参数提取、意图识别、行程生成
 - `app/corpus.py`：北京 / 成都 / 上海真实语料
-- `frontend/app.js`：行程规划、攻略广场、收藏、管理后台
+- `frontend/assets/app.js`：行程规划、攻略广场、收藏、管理后台
 
 ## 2. 完整后端工程体系
 
@@ -69,5 +69,5 @@ main_parse -> main_plan -> dispatch(Send) -> route -> validate -> synthesis -> f
 证据：
 - `app/db.py::create_review`
 - `app/api/routes.py::admin_reviews`
-- `frontend/app.js` 管理后台
+- `frontend/assets/app.js` 管理后台
 

@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
-from app.agent.graph import create_agent
+from app.agent.multi_graph import create_agent
 from app.config import get_settings
 from app.db import Database
 from app.deps import (
