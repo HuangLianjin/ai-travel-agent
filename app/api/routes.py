@@ -1244,6 +1244,31 @@ async def list_favorites(
     return db.paginate_favorites(user["id"], page=page, page_size=page_size)
 
 
+@router.get("/admin/guides")
+async def admin_guides(
+    page: int = 1,
+    page_size: int = 10,
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    data = db.paginate_guides(
+        None,
+        user_id=user["id"],
+        page=page,
+        page_size=page_size,
+        sort="new",
+    )
+    for item in data.get("items") or []:
+        author = db.query_one(
+            "SELECT username, nickname, avatar FROM users WHERE id = ?",
+            (item.get("user_id"),),
+        )
+        if author:
+            item["author_nickname"] = author["nickname"] or author["username"]
+            item["author_avatar"] = author["avatar"] or ""
+    return data
+
+
 @router.get("/admin/reviews")
 async def admin_reviews(
     status: str | None = None,

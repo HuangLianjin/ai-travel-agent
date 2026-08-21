@@ -134,6 +134,10 @@ createApp({
       priceDraft: { place_name: "", city: "", price: "", source: "人工维护", source_url: "", note: "" },
       metrics: null,
       agentRuns: [],
+      adminGuides: [],
+      adminGuidePage: 1,
+      adminGuidePages: 1,
+      adminGuideTotal: 0,
       evalReport: null,
       liveAlerts: [],
       toast: "",
@@ -652,19 +656,35 @@ createApp({
       await this.loadLikedGuides();
     },
     async loadAdmin() {
-      const [reviews, users, logs, slots, prices, feedback] = await Promise.all([
+      const [reviews, users, logs, slots, prices, feedback, guides] = await Promise.all([
         request("/admin/reviews"),
         request("/admin/users"),
         request("/admin/audit-logs"),
         request("/admin/recommend-slots"),
         request("/admin/prices"),
         request("/admin/price-feedback"),
+        request("/admin/guides?page=1&page_size=10"),
       ]);
       this.reviews = reviews;
       this.users = users;
       this.auditLogs = logs;
       this.priceReferences = prices || [];
       this.priceFeedback = feedback || [];
+      this.adminGuides = guides.items || [];
+      this.adminGuideTotal = guides.total || 0;
+      this.adminGuidePages = guides.pages || 1;
+    },
+    async goAdminGuidePage(page) {
+      if (page < 1 || page > this.adminGuidePages) return;
+      this.adminGuidePage = page;
+      const data = await request(`/admin/guides?page=${page}&page_size=10`);
+      this.adminGuides = data.items || [];
+      this.adminGuideTotal = data.total || 0;
+      this.adminGuidePages = data.pages || 1;
+    },
+    switchAdminTab(tab) {
+      this.adminTab = tab;
+      if (tab === "guides" && !this.adminGuides.length) this.goAdminGuidePage(1);
     },
     async savePrice() {
       if (!this.priceDraft.place_name.trim() || !this.priceDraft.price) {
@@ -1622,7 +1642,7 @@ createApp({
                     </span>
                     · {{ viewGuide.city }} · {{ formatSubmitTime(viewGuide.created_at) }}
                   </div>
-                  <div v-if="viewGuide.user_id && (!profile || viewGuide.user_id !== profile.id)" style="margin-top:8px;display:flex;align-items:center;gap:10px">
+                  <div v-if="viewGuide.user_id && (!profile || viewGuide.user_id !== profile.id) && !isAdmin" style="margin-top:8px;display:flex;align-items:center;gap:10px">
                     <button class="btn sm" :class="{primary:viewGuide.is_following}" @click="toggleFollow(viewGuide)" :disabled="followSaving">
                       <i data-lucide="user-plus"></i> {{ viewGuide.is_following ? '已关注' : '关注' }}
                     </button>
@@ -1650,9 +1670,9 @@ createApp({
                 </div>
               </div>
               <div class="guide-actions" style="margin-top:12px">
-                <button v-if="viewGuide.trip_itinerary && viewGuide.trip_itinerary.days && viewGuide.trip_itinerary.days.length" class="btn primary sm" @click="copyGuideTrip"><i data-lucide="briefcase"></i> 加入我的行程</button>
-                <button class="btn sm" :class="{primary:viewGuide.liked_by_me}" :disabled="viewGuide._likeBusy" @click="likeGuide(viewGuide)"><i data-lucide="thumbs-up"></i> {{ viewGuide.liked_by_me ? '已赞' : '点赞' }} {{ viewGuide.likes }}</button>
-                <button class="btn sm" :class="{primary:viewGuide.favorited_by_me}" :disabled="viewGuide._favBusy" @click="favoriteGuide(viewGuide)"><i data-lucide="heart"></i> {{ viewGuide.favorited_by_me ? '已收藏' : '收藏' }}</button>
+                <button v-if="viewGuide.trip_itinerary && viewGuide.trip_itinerary.days && viewGuide.trip_itinerary.days.length && !isAdmin" class="btn primary sm" @click="copyGuideTrip"><i data-lucide="briefcase"></i> 加入我的行程</button>
+                <button v-if="!isAdmin" class="btn sm" :class="{primary:viewGuide.liked_by_me}" :disabled="viewGuide._likeBusy" @click="likeGuide(viewGuide)"><i data-lucide="thumbs-up"></i> {{ viewGuide.liked_by_me ? '已赞' : '点赞' }} {{ viewGuide.likes }}</button>
+                <button v-if="!isAdmin" class="btn sm" :class="{primary:viewGuide.favorited_by_me}" :disabled="viewGuide._favBusy" @click="favoriteGuide(viewGuide)"><i data-lucide="heart"></i> {{ viewGuide.favorited_by_me ? '已收藏' : '收藏' }}</button>
               </div>
               <div style="margin-top:14px">
                 <h4>评论</h4>
@@ -1661,7 +1681,7 @@ createApp({
                   <div class="small">{{ cm.content }}</div>
                   <div class="small muted">{{ formatSubmitTime(cm.created_at) }}</div>
                 </div>
-                <div style="display:flex;gap:8px;margin-top:10px">
+                <div v-if="!isAdmin" style="display:flex;gap:8px;margin-top:10px">
                   <input v-model="guideComment" placeholder="写下你的评论" @keydown.enter.exact.prevent="addGuideComment" />
                   <button class="btn primary sm" @click="addGuideComment"><i data-lucide="send"></i> 评论</button>
                 </div>
@@ -1862,6 +1882,7 @@ createApp({
                 <button class="btn sm" :class="{primary:adminTab==='users'}" @click="adminTab='users'">用户治理</button>
                 <button class="btn sm" :class="{primary:adminTab==='audit'}" @click="adminTab='audit'">审计日志</button>
                 <button class="btn sm" :class="{primary:adminTab==='prices'}" @click="adminTab='prices'">真实数据</button>
+                <button class="btn sm" :class="{primary:adminTab==='guides'}" @click="switchAdminTab('guides')">攻略广场</button>
               </div>
               <div v-if="adminTab==='reviews'">
                 <table class="table">
@@ -1876,6 +1897,30 @@ createApp({
                     </td>
                   </tr>
                 </table>
+              </div>
+              <div v-if="adminTab==='guides'">
+                <div v-if="adminGuides.length===0" class="empty">暂无攻略</div>
+                <div v-for="g in adminGuides" :key="g.id" class="guide-item">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <b class="guide-title" @click="openGuide(g)">{{ g.title }}</b>
+                    <span class="tag">{{ g.city }}</span>
+                    <span class="status" :class="g.status">{{ statusText(g.status) }}</span>
+                    <span class="small muted">{{ g.author_nickname || g.username }}</span>
+                    <span class="small muted">{{ formatSubmitTime(g.created_at) }}</span>
+                  </div>
+                  <div class="small muted" style="margin-top:6px;white-space:pre-wrap">{{ g.content }}</div>
+                  <div v-if="g.images && g.images.length" class="guide-images">
+                    <img v-for="src in g.images" :key="src" :src="src" alt="攻略图片" />
+                  </div>
+                  <div class="guide-actions">
+                    <button class="btn sm" @click="openGuide(g)"><i data-lucide="eye"></i> 查看详情</button>
+                  </div>
+                </div>
+                <div class="pager" v-if="adminGuidePages > 1">
+                  <button class="btn sm" :disabled="adminGuidePage <= 1" @click="goAdminGuidePage(adminGuidePage - 1)">上一页</button>
+                  <span class="small muted">第 {{ adminGuidePage }} / {{ adminGuidePages }} 页 · 共 {{ adminGuideTotal }} 条</span>
+                  <button class="btn sm" :disabled="adminGuidePage >= adminGuidePages" @click="goAdminGuidePage(adminGuidePage + 1)">下一页</button>
+                </div>
               </div>
               <div v-if="adminTab==='users'">
                 <table class="table">
