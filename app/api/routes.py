@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import time
 import uuid
 from collections import deque
@@ -1123,6 +1124,25 @@ async def liked_guides(
     user: dict = Depends(require_role("user")),
 ):
     return db.paginate_liked_guides(user["id"], page=page, page_size=page_size)
+
+
+@router.delete("/guides/{guide_id}")
+async def delete_guide(
+    guide_id: str,
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("user")),
+):
+    guide = db.get_guide(guide_id)
+    if not guide or guide.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="攻略不存在")
+    deleted = db.delete_guide(guide_id, user["id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="攻略不存在")
+    settings = get_settings()
+    upload_dir = Path(settings.db_dir) / "uploads" / "guides" / guide_id
+    shutil.rmtree(upload_dir, ignore_errors=True)
+    audit(db, user["id"], "delete_guide", "guide", guide_id)
+    return {"status": "ok"}
 
 
 @router.get("/guides/{guide_id}")

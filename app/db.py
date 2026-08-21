@@ -1167,6 +1167,27 @@ class Database:
             "pages": pages,
         }
 
+    def delete_guide(self, guide_id: str, user_id: int | None = None) -> bool:
+        row = self.query_one("SELECT id FROM guides WHERE id = ?", (guide_id,))
+        if not row:
+            return False
+        if user_id is not None:
+            own = self.query_one(
+                "SELECT id FROM guides WHERE id = ? AND user_id = ?",
+                (guide_id, user_id),
+            )
+            if not own:
+                return False
+        self.execute("DELETE FROM likes WHERE guide_id = ?", (guide_id,))
+        self.execute("DELETE FROM favorites WHERE guide_id = ?", (guide_id,))
+        self.execute("DELETE FROM comments WHERE guide_id = ?", (guide_id,))
+        self.execute(
+            "DELETE FROM reviews WHERE target_type = 'guide' AND target_id = ?",
+            (guide_id,),
+        )
+        self.execute("DELETE FROM guides WHERE id = ?", (guide_id,))
+        return True
+
     def update_guide_status(
         self, guide_id: str, status: str, note: str = ""
     ) -> None:
@@ -1305,13 +1326,15 @@ class Database:
         note: str = "",
         reviewer_id: int | None = None,
     ) -> str:
-        existing = self.query_one(
+        existing = self.query_all(
             "SELECT id FROM reviews WHERE target_type = ? AND target_id = ? "
-            "ORDER BY created_at DESC LIMIT 1",
+            "ORDER BY created_at DESC",
             (target_type, target_id),
         )
         if existing:
-            return existing["id"]
+            for extra in existing[1:]:
+                self.execute("DELETE FROM reviews WHERE id = ?", (extra["id"],))
+            return existing[0]["id"]
         return self.create_review(
             target_type,
             target_id,
@@ -1469,6 +1492,16 @@ class Database:
             "decided_at = ? WHERE id = ? AND status = 'pending'",
             (status, note, reviewer_id, _now(), review_id),
         )
+        if cur > 0:
+            row = self.query_one(
+                "SELECT target_type, target_id FROM reviews WHERE id = ?",
+                (review_id,),
+            )
+            if row:
+                self.execute(
+                    "DELETE FROM reviews WHERE target_type = ? AND target_id = ? AND id != ?",
+                    (row["target_type"], row["target_id"], review_id),
+                )
         return cur > 0
 
     # ==================== 审计与推荐位 ====================

@@ -1073,6 +1073,13 @@ createApp({
       this.myGuidePage = page;
       await this.loadMyGuides();
     },
+    async deleteMyGuide(g) {
+      if (!confirm(`确定删除攻略「${g.title}」吗？删除后无法恢复。`)) return;
+      await request(`/guides/${g.id}`, { method: "DELETE" });
+      if (this.viewGuide && this.viewGuide.id === g.id) this.closeGuideDetail();
+      await this.loadMyGuides();
+      this.toastMsg("攻略已删除");
+    },
     onGuideImages(e) {
       this.releaseGuidePreviews();
       this.guideDraft.images = Array.from(e.target.files || []).map((f) => ({
@@ -1383,7 +1390,6 @@ createApp({
             <div class="small muted" style="margin-top:2px">{{ profile ? profile.username : "" }}</div>
           </div>
           <button class="btn sm" @click="openSecurityModal('password')" style="margin-top:8px"><i data-lucide="shield"></i> 安全</button>
-          <a v-if="adminEntry" class="btn sm" href="?" style="margin-top:8px"><i data-lucide="user"></i> 用户端</a>
           <button class="btn sm" @click="logout" style="margin-top:8px"><i data-lucide="log-out"></i> 退出</button>
         </div>
       </aside>
@@ -1644,6 +1650,9 @@ createApp({
                 <div class="small" style="margin-top:6px;white-space:pre-wrap">{{ g.content }}</div>
                 <div v-if="g.images && g.images.length" class="guide-images">
                   <img v-for="src in g.images" :key="src" :src="src" alt="攻略图片" />
+                </div>
+                <div class="guide-actions">
+                  <button class="btn sm danger" @click="deleteMyGuide(g)"><i data-lucide="trash-2"></i> 删除</button>
                 </div>
               </div>
               <div class="pager" v-if="myGuidePages > 1">
