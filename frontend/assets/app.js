@@ -2,13 +2,25 @@ const { createApp } = Vue;
 
 const apiBase = "/api";
 
+function isAdminEntry() {
+  return new URLSearchParams(window.location.search).get("admin") === "1";
+}
+
+function storageKeys() {
+  return isAdminEntry()
+    ? { token: "admin_token", refresh: "admin_refresh_token", user: "admin_user", session: "admin_sessionId" }
+    : { token: "token", refresh: "refresh_token", user: "user", session: "sessionId" };
+}
+
 function authHeaders() {
-  const token = localStorage.getItem("token") || "";
+  const ks = storageKeys();
+  const token = localStorage.getItem(ks.token) || "";
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 async function refreshTokens() {
-  const rt = localStorage.getItem("refresh_token");
+  const ks = storageKeys();
+  const rt = localStorage.getItem(ks.refresh);
   if (!rt) return false;
   const res = await fetch(`${apiBase}/auth/refresh`, {
     method: "POST",
@@ -17,8 +29,8 @@ async function refreshTokens() {
   });
   if (!res.ok) return false;
   const data = await res.json();
-  localStorage.setItem("token", data.access_token);
-  localStorage.setItem("refresh_token", data.refresh_token);
+  localStorage.setItem(ks.token, data.access_token);
+  localStorage.setItem(ks.refresh, data.refresh_token);
   return true;
 }
 
@@ -35,9 +47,10 @@ async function request(path, options = {}, retry = true) {
     return request(path, options, false);
   }
   if (res.status === 401) {
-    localStorage.removeItem("token");
-    localStorage.removeItem("refresh_token");
-    localStorage.removeItem("user");
+    const ks = storageKeys();
+    localStorage.removeItem(ks.token);
+    localStorage.removeItem(ks.refresh);
+    localStorage.removeItem(ks.user);
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || `请求失败 (${res.status})`);
@@ -46,9 +59,10 @@ async function request(path, options = {}, retry = true) {
 
 createApp({
   data() {
+    const ks = storageKeys();
     return {
-      token: localStorage.getItem("token") || "",
-      user: JSON.parse(localStorage.getItem("user") || "null"),
+      token: localStorage.getItem(ks.token) || "",
+      user: JSON.parse(localStorage.getItem(ks.user) || "null"),
       profile: null,
       profileModal: false,
       profileDraft: { nickname: "", avatar: "" },
@@ -80,7 +94,7 @@ createApp({
       pendingTotpUri: "",
       totpSetupCode: "",
       totpDisableCode: "",
-      sessionId: localStorage.getItem("sessionId") || "",
+      sessionId: localStorage.getItem(storageKeys().session) || "",
       view: "plan",
       chatInput: "",
       chatLog: [],
@@ -144,6 +158,9 @@ createApp({
     };
   },
   computed: {
+    adminEntry() {
+      return isAdminEntry();
+    },
     isAdmin() {
       return this.user && ["admin", "super_admin"].includes(this.user.role);
     },
@@ -296,17 +313,18 @@ createApp({
             totp_code: this.show2fa ? this.twofaCode : "",
           }),
         });
+        const ks = storageKeys();
         this.token = data.access_token;
         this.user = data.user;
-        localStorage.setItem("token", data.access_token);
-        localStorage.setItem("refresh_token", data.refresh_token || "");
-        localStorage.setItem("user", JSON.stringify(data.user));
+        localStorage.setItem(ks.token, data.access_token);
+        localStorage.setItem(ks.refresh, data.refresh_token || "");
+        localStorage.setItem(ks.user, JSON.stringify(data.user));
         this.show2fa = false;
         this.twofaCode = "";
         this.authNotice = "";
         if (!this.sessionId) {
           this.sessionId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
-          localStorage.setItem("sessionId", this.sessionId);
+          localStorage.setItem(ks.session, this.sessionId);
         }
         this.loadMyProfile();
         if (data.must_change_password) {
@@ -455,7 +473,8 @@ createApp({
       }
     },
     async logout() {
-      const rt = localStorage.getItem("refresh_token");
+      const ks = storageKeys();
+      const rt = localStorage.getItem(ks.refresh);
       if (rt) {
         try {
           await fetch(`${apiBase}/auth/logout`, {
@@ -465,9 +484,9 @@ createApp({
           });
         } catch (e) {}
       }
-      localStorage.removeItem("token");
-      localStorage.removeItem("refresh_token");
-      localStorage.removeItem("user");
+      localStorage.removeItem(ks.token);
+      localStorage.removeItem(ks.refresh);
+      localStorage.removeItem(ks.user);
       location.reload();
     },
     openSecurityModal(tab) {
@@ -1016,7 +1035,7 @@ createApp({
       this.liveAlerts = [];
       this.chatLog = [];
       this.sessionId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
-      localStorage.setItem("sessionId", this.sessionId);
+      localStorage.setItem(storageKeys().session, this.sessionId);
       this.$nextTick(() => lucide.createIcons());
       this.toastMsg("已开始新建行程");
     },
@@ -1279,6 +1298,10 @@ createApp({
           <span class="logo"><i data-lucide="map"></i></span>
           <span>星旅 Agent</span>
         </div>
+        <div class="small muted" style="margin:6px 0 10px">
+          <template v-if="adminEntry">管理员入口 · <a href="?">切换到用户端</a></template>
+          <template v-else>用户入口 · <a href="?admin=1">切换到管理端</a></template>
+        </div>
 
         <div v-if="authMode === 'login'">
           <div class="field">
@@ -1360,6 +1383,7 @@ createApp({
             <div class="small muted" style="margin-top:2px">{{ profile ? profile.username : "" }}</div>
           </div>
           <button class="btn sm" @click="openSecurityModal('password')" style="margin-top:8px"><i data-lucide="shield"></i> 安全</button>
+          <a v-if="adminEntry" class="btn sm" href="?" style="margin-top:8px"><i data-lucide="user"></i> 用户端</a>
           <button class="btn sm" @click="logout" style="margin-top:8px"><i data-lucide="log-out"></i> 退出</button>
         </div>
       </aside>
