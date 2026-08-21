@@ -77,7 +77,7 @@ python -m app.eval.runner --output data/eval_report.json
 
 当前结果：pytest 11/11 通过；业务评测 24/24，主 Agent 评测 24/24。
 
-真实 20 城基准：20/20 成功，平均耗时 28.1s，P95 37.8s。
+真实 40 城基准：40/40 成功，平均耗时 39.6s，P95 47.2s，总 Token 150,590，成本约 0.79 元。
 
 ## 架构与截图
 

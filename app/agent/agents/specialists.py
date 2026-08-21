@@ -13,6 +13,7 @@ from app.services.planner import (
     _diversify_days,
     _enforce_budget,
     _ensure_min_spend,
+    _matches_removal,
     _merge_transport_legs,
     _recompute_costs,
     _refresh_timeline,
@@ -446,52 +447,103 @@ class SynthesisAgent(BaseTravelAgent):
         transport = self._collect_transport(results)
         existing = context.get("existing_plan") or context.get("itinerary") or {}
 
-        plan = None
-        mode = "rules"
-        try:
-            plan = await self._llm_build_plan(
-                params,
-                docs,
-                existing,
-                context.get("user_input", ""),
-                transport,
-            )
-            if plan:
-                mode = "llm"
-        except Exception:
-            plan = None
+        task_plan = context.get("task_plan") or {}
+        changed_fields = task_plan.get("changed_fields") or []
+        only_date_change = (
+            context.get("intent") == "adjust"
+            and bool(existing)
+            and bool(changed_fields)
+            and all(f in ("date", "departure_date") for f in changed_fields)
+        )
 
-        if existing:
-            base_plan = plan or existing
-            plan = apply_adjustment(
-                base_plan,
-                context.get("user_input", ""),
-                docs,
-                params,
-            )
-            version = int(context.get("version", 1)) + 1
-        elif not plan:
-            plan = build_itinerary(params, raw_docs or docs, self.searcher or HybridSearcher())
-            version = 1
-        else:
-            version = 1
+        if only_date_change:
+            import copy
 
-        plan = self._correct_plan(plan, docs)
-        plan = await self._clean_listing_names(plan, docs)
-        plan = self._optimize_plan(plan, docs)
-        plan = validate_plan(plan)
-        plan = await self._enrich_transport_legs(plan)
-        if transport:
-            plan["transport"] = transport
-            plan = _merge_transport_legs(plan)
-            plan = _refresh_timeline(plan)
+            plan = copy.deepcopy(existing)
+            merged_params = dict(existing.get("params") or {})
+            merged_params.update(params)
+            plan["params"] = merged_params
+            plan["city"] = (
+                existing.get("city")
+                or params.get("city")
+                or plan.get("city")
+                or "北京"
+            )
             plan = _recompute_costs(plan)
-            plan = _enforce_budget(plan)
+            plan = self._refresh_summary(plan, merged_params)
+            version = int(context.get("version", 1)) + 1
+            mode = "date_only"
+            response = (
+                f"已更新出发日期为 {params.get('departure_date')}，"
+                "行程内容保持不变。"
+            )
+        else:
+            plan = None
+            mode = "rules"
+            try:
+                plan = await self._llm_build_plan(
+                    params,
+                    docs,
+                    existing,
+                    context.get("user_input", ""),
+                    transport,
+                )
+                if plan:
+                    mode = "llm"
+            except Exception:
+                plan = None
 
-        response = format_reply(plan, context.get("intent", "create"))
+            if existing:
+                base_plan = plan or existing
+                plan = apply_adjustment(
+                    base_plan,
+                    context.get("user_input", ""),
+                    docs,
+                    params,
+                )
+                version = int(context.get("version", 1)) + 1
+            elif not plan:
+                plan = build_itinerary(params, raw_docs or docs, self.searcher or HybridSearcher())
+                version = 1
+            else:
+                version = 1
+
+            plan = self._correct_plan(plan, docs)
+            plan = await self._clean_listing_names(plan, docs)
+            plan = self._optimize_plan(plan, docs)
+            plan = validate_plan(plan)
+            plan = await self._enrich_transport_legs(plan)
+            if transport:
+                plan["transport"] = transport
+                plan = _merge_transport_legs(plan)
+                plan = _refresh_timeline(plan)
+                plan = _recompute_costs(plan)
+                plan = _enforce_budget(plan)
+
+            if any(
+                k in context.get("user_input", "")
+                for k in ("去掉", "不要", "不想", "不去", "删除", "删")
+            ):
+                plan = self._enforce_removals(plan, context.get("user_input", ""))
+            plan = self._refresh_summary(plan, params)
+            response = format_reply(plan, context.get("intent", "create"))
         departure_date = params.get("departure_date") or ""
+        for key in (
+            "weather",
+            "weather_advice",
+            "weather_warnings",
+            "weather_unavailable",
+            "weather_notice",
+            "weather_max_days",
+            "weather_missing",
+        ):
+            plan.pop(key, None)
         if departure_date:
-            from app.tools.weather import WeatherService, travel_advice
+            from app.tools.weather import (
+                WeatherService,
+                travel_advice,
+                weather_unavailable_notice,
+            )
 
             city = plan.get("city") or params.get("city") or "北京"
             plan["city"] = city
@@ -504,9 +556,32 @@ class SynthesisAgent(BaseTravelAgent):
             lon = first_attr.get("lon") if first_attr else None
             days = len(plan.get("days", []) or []) or 1
             weather_service = WeatherService()
+            max_days = weather_service.max_forecast_days()
+            plan["weather_max_days"] = max_days
             weather = await weather_service.forecast(
                 city, lat, lon, departure_date, days
             )
+            missing: list[dict[str, Any]] = []
+            try:
+                from datetime import date, timedelta as _timedelta
+                start = date.fromisoformat(departure_date)
+                for i in range(max(1, int(days))):
+                    day_iso = (start + _timedelta(days=i)).isoformat()
+                    if not any(str(w.get("date", "")) == day_iso for w in weather):
+                        missing.append(
+                            {
+                                "date": day_iso,
+                                "reason": weather_unavailable_notice(
+                                    day_iso, max_days
+                                ),
+                            }
+                        )
+            except (TypeError, ValueError):
+                missing = []
+            if missing:
+                plan["weather_missing"] = missing
+            else:
+                plan.pop("weather_missing", None)
             if weather:
                 plan["weather"] = weather
                 plan["weather_advice"] = travel_advice(weather)
@@ -522,7 +597,19 @@ class SynthesisAgent(BaseTravelAgent):
                         f"{w['title']}：{w['text']}" for w in warnings
                     )
                 plan = _refresh_timeline(plan)
+                if missing:
+                    response += "\n\n天气说明：" + "；".join(
+                        m["reason"] for m in missing[:5]
+                    )
+            else:
+                plan["weather_unavailable"] = True
+                plan["weather_notice"] = weather_unavailable_notice(
+                    departure_date, weather_service.max_forecast_days()
+                )
+                response += f"\n\n出发日期 {departure_date}：{plan['weather_notice']}"
         else:
+            plan["weather_unavailable"] = True
+            plan["weather_notice"] = "尚未设置出发日期，无法查询当天天气。"
             response += "\n\n请告诉我你计划哪天出发（例如 2026-08-25），我会帮你查那几天天气并给出出行建议。"
 
         from app.tools.live_data import LiveDataService
@@ -939,6 +1026,50 @@ class SynthesisAgent(BaseTravelAgent):
                 chosen.append(d)
                 seen.add(key)
         return chosen
+
+    @staticmethod
+    def _refresh_summary(plan: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+        from datetime import date as _date
+
+        city = plan.get("city") or params.get("city") or ""
+        days = len(plan.get("days") or []) or params.get("days") or 1
+        travelers = params.get("travelers", 1) or 1
+        dep = params.get("departure_date") or ""
+        budget = params.get("budget")
+        parts = [f"{city}{days}天{travelers}人"]
+        if dep:
+            try:
+                d = _date.fromisoformat(dep)
+                parts.append(f"{d.month}月{d.day}日出发")
+            except (TypeError, ValueError):
+                parts.append(f"{dep}出发")
+        if budget:
+            parts.append(f"预算{budget}元")
+        plan["summary"] = "，".join(parts) + "。"
+        return plan
+
+    @staticmethod
+    def _enforce_removals(plan: dict[str, Any], instruction: str) -> dict[str, Any]:
+        """用户明确说去掉/不要时，最终结果里强制删除，避免后续步骤加回。"""
+        for day in plan.get("days", []) or []:
+            day["attractions"] = [
+                a
+                for a in day.get("attractions", []) or []
+                if not _matches_removal(str(a.get("name", "")), instruction)
+            ]
+            day["dining"] = [
+                f
+                for f in day.get("dining", []) or []
+                if not _matches_removal(str(f.get("name", "")), instruction)
+            ]
+            kept_tl = []
+            for item in day.get("timeline", []) or []:
+                nm = item.get("title") or item.get("restaurant") or item.get("name") or ""
+                if not _matches_removal(str(nm), instruction):
+                    kept_tl.append(item)
+            day["timeline"] = kept_tl
+        plan = _refresh_timeline(plan)
+        return _recompute_costs(plan)
 
     @staticmethod
     def _find_replacement(

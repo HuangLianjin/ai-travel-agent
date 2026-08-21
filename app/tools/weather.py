@@ -96,6 +96,16 @@ class WeatherService:
         self.qweather_api_host = os.getenv("QWEATHER_API_HOST", "").strip().rstrip("/")
         self.openweather_key = os.getenv("OPENWEATHER_API_KEY", "")
 
+    def max_forecast_days(self) -> int:
+        """当前天气源可实时预报的最大天数，超出的日期不提供伪造预报。"""
+        if self.provider in ("qweather", "auto") and self.qweather_key and self.qweather_api_host:
+            return 10
+        if self.provider in ("openweather", "auto") and self.openweather_key:
+            return 5
+        if self.provider in ("openmeteo", "auto"):
+            return 16
+        return 3
+
     async def forecast(
         self,
         city: str,
@@ -409,3 +419,20 @@ def _to_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def weather_unavailable_notice(start_date: str, max_days: int) -> str:
+    """真实数据原则：预报范围外或服务失败时明确说明，不编造天气。"""
+    if not start_date:
+        return "尚未设置出发日期，无法查询当天天气。"
+    try:
+        d = date.fromisoformat(start_date)
+        offset = (d - date.today()).days
+    except (TypeError, ValueError):
+        return "出发日期格式不正确，暂时无法查询天气。"
+    if offset > max_days:
+        return (
+            f"{d.month}月{d.day}日已超出当前实时预报范围（约 {max_days} 天内），"
+            "暂无法提供该日准确天气，建议出发前 1-3 天再查询。"
+        )
+    return "当前天气服务暂时无法获取该日实时数据，请稍后再试。"

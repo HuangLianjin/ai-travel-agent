@@ -124,7 +124,7 @@ createApp({
       myGuidePage: 1,
       myGuidePages: 1,
       myGuideTotal: 0,
-      guideDraft: { title: "", city: "", content: "", trip_id: "", images: [] },
+      guideDraft: { title: "", city: "", content: "", feelings: "", trip_id: "", images: [] },
       adminTab: "reviews",
       reviews: [],
       users: [],
@@ -150,13 +150,31 @@ createApp({
       if (!this.trip || !this.trip.days || !this.trip.days.length) return null;
       return this.trip.days[this.dayPage - 1] || this.trip.days[0];
     },
+    todayIso() {
+      const t = this.trip;
+      if (!t || !t.params || !t.params.departure_date) return "";
+      const start = new Date(`${t.params.departure_date}T00:00:00`);
+      const day = new Date(start.getTime() + (this.dayPage - 1) * 86400000);
+      return this.toLocalDate(day);
+    },
     currentDayWeather() {
       const t = this.trip;
       if (!t || !t.params || !t.params.departure_date) return null;
-      const start = new Date(`${t.params.departure_date}T00:00:00`);
-      const day = new Date(start.getTime() + (this.dayPage - 1) * 86400000);
-      const iso = this.toLocalDate(day);
+      const iso = this.todayIso;
       return (t.weather || []).find(w => w.date === iso) || null;
+    },
+    currentDayWeatherNotice() {
+      const t = this.trip;
+      if (!t || !t.params || !t.params.departure_date) return "";
+      if (this.currentDayWeather) return "";
+      const iso = this.todayIso;
+      const missing = (t.weather_missing || []).find(m => m.date === iso);
+      if (missing && missing.reason) return missing.reason;
+      if (t.weather_notice) return t.weather_notice;
+      const max = Number(t.weather_max_days) || 10;
+      const offset = Math.floor((new Date(`${iso}T00:00:00`).getTime() - new Date(`${t.params.departure_date}T00:00:00`).getTime()) / 86400000);
+      if (offset >= max) return `${this.formatDate(iso)} 已超出当前实时预报范围（约 ${max} 天内），暂无法提供该日准确天气，建议出发前 1-3 天再查询。`;
+      return "当天实时天气暂时无法获取，请稍后再试。";
     },
     endDate() {
       const t = this.trip;
@@ -999,7 +1017,19 @@ createApp({
       await this.loadMyGuides();
     },
     onGuideImages(e) {
-      this.guideDraft.images = Array.from(e.target.files || []);
+      this.releaseGuidePreviews();
+      this.guideDraft.images = Array.from(e.target.files || []).map((f) => ({
+        file: f,
+        name: f.name,
+        size: f.size,
+        preview: URL.createObjectURL(f),
+      }));
+    },
+    releaseGuidePreviews() {
+      (this.guideDraft.images || []).forEach((img) => {
+        if (img.preview) URL.revokeObjectURL(img.preview);
+      });
+      this.guideDraft.images = [];
     },
     onSelectGuideTrip() {
       const t = this.trips.find((x) => x.id === this.guideDraft.trip_id);
@@ -1010,6 +1040,7 @@ createApp({
       this.$nextTick(() => lucide.createIcons());
     },
     closeGuideModal() {
+      this.releaseGuidePreviews();
       this.showGuideModal = false;
     },
     openMyGuidesModal() {
@@ -1070,13 +1101,17 @@ createApp({
           alert("标题和内容不能为空");
           return;
         }
+        if (!this.guideDraft.feelings.trim()) {
+          alert("请填写游玩感受，例如哪里最值得去、体验如何");
+          return;
+        }
         this.guideSaving = true;
         const fd = new FormData();
         fd.append("title", this.guideDraft.title);
-        fd.append("content", this.guideDraft.content);
+        fd.append("content", `${this.guideDraft.content.trim()}\n\n【游玩感受】\n${this.guideDraft.feelings.trim()}`);
         fd.append("trip_id", this.guideDraft.trip_id);
         fd.append("city", this.guideDraft.city);
-        (this.guideDraft.images || []).forEach((f) => fd.append("images", f));
+        (this.guideDraft.images || []).forEach((f) => fd.append("images", f.file));
         const res = await fetch(`${apiBase}/guides/upload`, {
           method: "POST",
           headers: authHeaders(),
@@ -1086,7 +1121,7 @@ createApp({
           const d = await res.json().catch(() => ({}));
           throw new Error(d.detail || `请求失败 (${res.status})`);
         }
-        this.guideDraft = { title: "", city: "", content: "", trip_id: "", images: [] };
+        this.guideDraft = { title: "", city: "", content: "", feelings: "", trip_id: "", images: [] };
         this.closeGuideModal();
         this.toastMsg("攻略已提交，等待管理员审核");
         this.loadMyGuides();
@@ -1096,23 +1131,70 @@ createApp({
       }
     },
     async likeGuide(guide) {
-      const liked = !guide.liked_by_me;
-      const res = await request(`/guides/${guide.id}/like`, {
-        method: "POST",
-        body: JSON.stringify({ liked }),
-      });
-      guide.liked_by_me = res.liked;
-      guide.likes = res.likes;
+      if (guide._likeBusy) return;
+      const prevLiked = !!guide.liked_by_me;
+      const prevLikes = guide.likes || 0;
+      const next = !prevLiked;
+      guide.liked_by_me = next;
+      guide.likes = next ? prevLikes + 1 : Math.max(0, prevLikes - 1);
+      guide._likeBusy = true;
+      try {
+        const res = await request(`/guides/${guide.id}/like`, {
+          method: "POST",
+          body: JSON.stringify({ liked: next }),
+        });
+        guide.liked_by_me = res.liked;
+        guide.likes = res.likes;
+        guide.favorites = res.favorites;
+      } catch (e) {
+        guide.liked_by_me = prevLiked;
+        guide.likes = prevLikes;
+        alert(e.message);
+      } finally {
+        guide._likeBusy = false;
+        if (this.view === "favorites" && this.favTab === "liked") this.loadLikedGuides();
+      }
     },
     async favoriteGuide(guide) {
-      const favorited = !guide.favorited_by_me;
-      const res = await request(`/guides/${guide.id}/favorite`, {
-        method: "POST",
-        body: JSON.stringify({ favorited }),
-      });
-      guide.favorited_by_me = res.favorited;
-      guide.favorites = res.favorites;
-      this.loadFavorites();
+      if (guide._favBusy) return;
+      const prevFav = !!guide.favorited_by_me;
+      const prevFavs = guide.favorites || 0;
+      const next = !prevFav;
+      guide.favorited_by_me = next;
+      guide.favorites = next ? prevFavs + 1 : Math.max(0, prevFavs - 1);
+      guide._favBusy = true;
+      try {
+        const res = await request(`/guides/${guide.id}/favorite`, {
+          method: "POST",
+          body: JSON.stringify({ favorited: next }),
+        });
+        guide.favorited_by_me = res.favorited;
+        guide.favorites = res.favorites;
+      } catch (e) {
+        guide.favorited_by_me = prevFav;
+        guide.favorites = prevFavs;
+        alert(e.message);
+      } finally {
+        guide._favBusy = false;
+        if (this.view === "favorites") {
+          if (!next) {
+            this.favorites = this.favorites.filter((x) => x.id !== guide.id);
+            this.favoriteTotal = Math.max(0, this.favoriteTotal - 1);
+            this.favoritePages = Math.max(1, Math.ceil(this.favoriteTotal / this.favoritePageSize));
+            if (this.favorites.length === 0 && this.favoritePage > 1) {
+              this.favoritePage -= 1;
+              this.loadFavorites();
+            }
+          } else if (this.favTab === "favorited") {
+            this.loadFavorites();
+          }
+        }
+      }
+    },
+    switchFavTab(tab) {
+      this.favTab = tab;
+      if (tab === "favorited" && !this.favorites.length) this.loadFavorites();
+      if (tab === "liked" && !this.likedGuides.length) this.loadLikedGuides();
     },
     async decideReview(review, status) {
       const note = prompt(status === "approved" ? "审核意见（可留空）" : "驳回原因");
@@ -1149,7 +1231,8 @@ createApp({
     this.$nextTick(() => lucide.createIcons());
   },
   updated() {
-    this.$nextTick(() => lucide.createIcons());
+    clearTimeout(this._iconDebounce);
+    this._iconDebounce = setTimeout(() => this.$nextTick(() => lucide.createIcons()), 120);
   },
   template: `
     <div v-if="!token" class="login-page">
@@ -1291,6 +1374,14 @@ createApp({
                   <div v-if="trip.weather_warnings && trip.weather_warnings.length" class="notice">天气预警：<span v-for="ww in trip.weather_warnings" :key="ww.title">{{ ww.title }}</span></div>
                 </div>
               </div>
+              <div v-else-if="currentDayWeatherNotice" class="today-weather unavailable">
+                <i data-lucide="cloud-off" style="width:26px;height:26px"></i>
+                <div class="today-weather-body">
+                  <div class="today-weather-title">{{ formatDate(todayIso) }} 天气暂不可查</div>
+                  <div class="small" style="margin-top:4px">{{ currentDayWeatherNotice }}</div>
+                </div>
+              </div>
+
                             <div v-if="currentDay" class="day-block">
                 <h4>Day {{ currentDay.day }} · {{ currentDay.theme }}</h4>
                 <div v-if="currentDay.timeline && currentDay.timeline.length" class="timeline">
@@ -1315,7 +1406,7 @@ createApp({
                   <div v-for="item in currentDay.attractions" :key="item.name" class="small" style="padding:4px 0">
                     <b>{{ item.name }}</b>
                     <span v-if="item.data_label" class="data-badge" :class="'lv-' + (item.data_level || 'B')">{{ item.data_label }}</span>
-                    <span class="muted"> · {{ item.opening_hours }} · {{ item.fee || 0 }} 元 · {{ item.duration_hours }}h</span>
+                    <span class="muted"> · {{ item.opening_hours }} · {{ item.fee != null ? item.fee : '待查' }} 元 · {{ item.duration_hours }}h</span>
                     <div class="muted">{{ item.note }}</div>
                     <a v-if="item.official_url" :href="item.official_url" target="_blank" rel="noopener" class="link-btn"><i data-lucide="ticket"></i> 官方预约</a>
                   </div>
@@ -1435,8 +1526,8 @@ createApp({
               </div>
               <div class="guide-actions">
                 <button class="btn sm" @click="openGuide(g)"><i data-lucide="eye"></i> 查看详情</button>
-                <button class="btn sm" :class="{primary:g.liked_by_me}" @click="likeGuide(g)"><i data-lucide="thumbs-up"></i> {{ g.liked_by_me ? '已赞' : '点赞' }} {{ g.likes }}</button>
-                <button class="btn sm" :class="{primary:g.favorited_by_me}" @click="favoriteGuide(g)"><i data-lucide="heart"></i> {{ g.favorited_by_me ? '已收藏' : '收藏' }}</button>
+                <button class="btn sm" :class="{primary:g.liked_by_me}" :disabled="g._likeBusy" @click="likeGuide(g)"><i data-lucide="thumbs-up"></i> {{ g.liked_by_me ? '已赞' : '点赞' }} {{ g.likes }}</button>
+                <button class="btn sm" :class="{primary:g.favorited_by_me}" :disabled="g._favBusy" @click="favoriteGuide(g)"><i data-lucide="heart"></i> {{ g.favorited_by_me ? '已收藏' : '收藏' }}</button>
               </div>
             </div>
             <div class="pager" v-if="guidePages > 1">
@@ -1458,9 +1549,13 @@ createApp({
               <div class="field"><label>标题</label><input v-model="guideDraft.title" /></div>
               <div class="field"><label>城市</label><input v-model="guideDraft.city" :disabled="!!guideDraft.trip_id" placeholder="北京 / 成都 / 上海" /></div>
               <div class="field"><label>内容</label><textarea v-model="guideDraft.content" rows="6"></textarea></div>
-              <div class="field"><label>游玩照片</label><input type="file" multiple accept="image/*" @change="onGuideImages" /></div>
+              <div class="field"><label>游玩感受</label><textarea v-model="guideDraft.feelings" rows="4" placeholder="例如：最值得去的地方、哪家店最惊艳、整体体验如何"></textarea></div>
+              <div class="field"><label>游玩照片（可多选）</label><input type="file" multiple accept="image/*" @change="onGuideImages" /></div>
               <div v-if="guideDraft.images && guideDraft.images.length" class="guide-images">
-                <div v-for="(f, i) in guideDraft.images" :key="i" class="small muted">{{ f.name }}（{{ (f.size / 1024).toFixed(0) }}KB）</div>
+                <div v-for="(f, i) in guideDraft.images" :key="i" class="guide-upload-preview">
+                  <img :src="f.preview" alt="图片预览" />
+                  <div class="small muted">{{ f.name }}（{{ (f.size / 1024).toFixed(0) }}KB）</div>
+                </div>
               </div>
               <div class="action-row">
                 <button class="btn sm" @click="closeGuideModal">取消</button>
@@ -1538,8 +1633,8 @@ createApp({
               </div>
               <div class="guide-actions" style="margin-top:12px">
                 <button v-if="viewGuide.trip_itinerary && viewGuide.trip_itinerary.days && viewGuide.trip_itinerary.days.length" class="btn primary sm" @click="copyGuideTrip"><i data-lucide="briefcase"></i> 加入我的行程</button>
-                <button class="btn sm" :class="{primary:viewGuide.liked_by_me}" @click="likeGuide(viewGuide)"><i data-lucide="thumbs-up"></i> {{ viewGuide.liked_by_me ? '已赞' : '点赞' }} {{ viewGuide.likes }}</button>
-                <button class="btn sm" :class="{primary:viewGuide.favorited_by_me}" @click="favoriteGuide(viewGuide)"><i data-lucide="heart"></i> {{ viewGuide.favorited_by_me ? '已收藏' : '收藏' }}</button>
+                <button class="btn sm" :class="{primary:viewGuide.liked_by_me}" :disabled="viewGuide._likeBusy" @click="likeGuide(viewGuide)"><i data-lucide="thumbs-up"></i> {{ viewGuide.liked_by_me ? '已赞' : '点赞' }} {{ viewGuide.likes }}</button>
+                <button class="btn sm" :class="{primary:viewGuide.favorited_by_me}" :disabled="viewGuide._favBusy" @click="favoriteGuide(viewGuide)"><i data-lucide="heart"></i> {{ viewGuide.favorited_by_me ? '已收藏' : '收藏' }}</button>
               </div>
               <div style="margin-top:14px">
                 <h4>评论</h4>
@@ -1559,16 +1654,19 @@ createApp({
           <div v-else-if="view==='favorites'" class="card">
             <h3>我的收藏</h3>
             <div class="tab-row">
-              <button class="btn sm" :class="{primary: favTab==='favorited'}" @click="favTab='favorited'">收藏 {{ favoriteTotal }}</button>
-              <button class="btn sm" :class="{primary: favTab==='liked'}" @click="favTab='liked'">点赞 {{ likedTotal }}</button>
+              <button class="btn sm" :class="{primary: favTab==='favorited'}" @click="switchFavTab('favorited')">收藏 {{ favoriteTotal }}</button>
+              <button class="btn sm" :class="{primary: favTab==='liked'}" @click="switchFavTab('liked')">点赞 {{ likedTotal }}</button>
             </div>
             <div v-if="favTab==='favorited'">
               <div v-if="favorites.length===0" class="empty">还没有收藏</div>
               <div v-for="g in favorites" :key="g.id" class="guide-item">
-                <b>{{ g.title }}</b>
+                <b class="guide-title" @click="openGuide(g)">{{ g.title }}</b>
                 <div class="small muted">{{ g.content }}</div>
                 <div v-if="g.images && g.images.length" class="guide-images">
                   <img v-for="src in g.images" :key="src" :src="src" alt="攻略图片" />
+                </div>
+                <div class="guide-actions">
+                  <button class="btn sm" @click="openGuide(g)"><i data-lucide="eye"></i> 查看详情</button>
                 </div>
               </div>
               <div class="pager" v-if="favoritePages > 1">
@@ -1580,10 +1678,13 @@ createApp({
             <div v-else>
               <div v-if="likedGuides.length===0" class="empty">还没有点赞的攻略</div>
               <div v-for="g in likedGuides" :key="g.id" class="guide-item">
-                <b>{{ g.title }}</b>
+                <b class="guide-title" @click="openGuide(g)">{{ g.title }}</b>
                 <div class="small muted">{{ g.content }}</div>
                 <div v-if="g.images && g.images.length" class="guide-images">
                   <img v-for="src in g.images" :key="src" :src="src" alt="攻略图片" />
+                </div>
+                <div class="guide-actions">
+                  <button class="btn sm" @click="openGuide(g)"><i data-lucide="eye"></i> 查看详情</button>
                 </div>
               </div>
               <div class="pager" v-if="likedPages > 1">

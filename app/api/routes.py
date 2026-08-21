@@ -7,7 +7,7 @@ import re
 import time
 import uuid
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -108,6 +108,68 @@ def _is_locked(user: dict) -> bool:
         return datetime.fromisoformat(locked) > datetime.now(timezone.utc)
     except Exception:
         return False
+
+
+async def _sync_weather(
+    itinerary: dict[str, Any],
+    city: str = "",
+    departure_date: str = "",
+    days: int = 1,
+) -> None:
+    """按当前出发日期刷新真实天气；预报范围外明确提示，不残留旧数据。"""
+    for key in (
+        "weather",
+        "weather_advice",
+        "weather_warnings",
+        "weather_unavailable",
+        "weather_notice",
+        "weather_max_days",
+        "weather_missing",
+    ):
+        itinerary.pop(key, None)
+    if not city or not departure_date:
+        itinerary["weather_unavailable"] = True
+        itinerary["weather_notice"] = "尚未设置出发日期，无法查询当天天气。"
+        return
+    from app.tools.weather import (
+        WeatherService,
+        travel_advice,
+        weather_unavailable_notice,
+    )
+
+    weather_service = WeatherService()
+    max_days = weather_service.max_forecast_days()
+    itinerary["weather_max_days"] = max_days
+    weather = await weather_service.forecast(city, None, None, departure_date, days)
+    warnings = await weather_service.warnings(city, None, None)
+    missing: list[dict[str, Any]] = []
+    try:
+        start = date.fromisoformat(departure_date)
+        for i in range(max(1, int(days))):
+            day_iso = (start + timedelta(days=i)).isoformat()
+            if not any(str(w.get("date", "")) == day_iso for w in weather):
+                missing.append(
+                    {
+                        "date": day_iso,
+                        "reason": weather_unavailable_notice(day_iso, max_days),
+                    }
+                )
+    except (TypeError, ValueError):
+        missing = []
+    if missing:
+        itinerary["weather_missing"] = missing
+    else:
+        itinerary.pop("weather_missing", None)
+    if weather:
+        itinerary["weather"] = weather
+        itinerary["weather_advice"] = travel_advice(weather)
+        if warnings:
+            itinerary["weather_warnings"] = warnings
+    else:
+        itinerary["weather_unavailable"] = True
+        itinerary["weather_notice"] = weather_unavailable_notice(
+            departure_date, weather_service.max_forecast_days()
+        )
 
 
 @router.post("/auth/send-code")
@@ -529,6 +591,18 @@ async def chat(
 
                 plan = final_state.get("itinerary", {})
                 plan = enrich_plan_with_prices(plan, db)
+                plan = _recompute_costs(plan)
+                _params = final_state.get("params") or plan.get("params") or {}
+                await _sync_weather(
+                    plan,
+                    plan.get("city") or _params.get("city", ""),
+                    _params.get("departure_date", ""),
+                    max(
+                        1,
+                        len(plan.get("days") or [])
+                        or int(_params.get("days", 1) or 1),
+                    ),
+                )
                 response = final_state.get("response", "") or ""
                 trip_id = final_state.get("trip_id", effective_trip_id)
                 if trip_id:
@@ -620,6 +694,17 @@ async def chat(
         )
         plan = state.get("itinerary", {})
         plan = enrich_plan_with_prices(plan, db)
+        plan = _recompute_costs(plan)
+        _params = state.get("params") or plan.get("params") or {}
+        await _sync_weather(
+            plan,
+            plan.get("city") or _params.get("city", ""),
+            _params.get("departure_date", ""),
+            max(
+                1,
+                len(plan.get("days") or []) or int(_params.get("days", 1) or 1),
+            ),
+        )
         response = state.get("response", "")
         trip_id = state.get("trip_id", effective_trip_id)
         if trip_id:
@@ -765,21 +850,17 @@ async def trip_live_alerts(
     alerts: list[dict[str, Any]] = []
 
     if departure_date and city:
-        from app.tools.weather import WeatherService, travel_advice
-
-        weather_service = WeatherService()
-        weather = await weather_service.forecast(city, None, None, departure_date, days)
-        warnings = await weather_service.warnings(city, None, None)
-        if weather:
+        await _sync_weather(itinerary, city, departure_date, days)
+        if itinerary.get("weather"):
             alerts.append(
                 {
                     "type": "weather",
                     "level": "info",
                     "title": "未来几天天气",
-                    "content": travel_advice(weather),
+                    "content": itinerary.get("weather_advice") or "",
                 }
             )
-            for item in weather:
+            for item in itinerary["weather"]:
                 if "雨" in str(item.get("text", "")):
                     alerts.append(
                         {
@@ -789,22 +870,24 @@ async def trip_live_alerts(
                             "content": "建议带伞并预留弹性时间，必要时调整当天行程。",
                         }
                     )
-        for item in warnings:
+            for item in itinerary.get("weather_warnings") or []:
+                alerts.append(
+                    {
+                        "type": "warning_alert",
+                        "level": "danger",
+                        "title": item.get("title") or "天气预警",
+                        "content": (item.get("text") or "")[:200],
+                    }
+                )
+        else:
             alerts.append(
                 {
-                    "type": "warning_alert",
-                    "level": "danger",
-                    "title": item.get("title") or "天气预警",
-                    "content": (item.get("text") or "")[:200],
+                    "type": "weather_unavailable",
+                    "level": "info",
+                    "title": "当天天气暂不可查",
+                    "content": itinerary.get("weather_notice") or "暂无法获取该日实时天气。",
                 }
             )
-        if weather:
-            itinerary["weather"] = weather
-            itinerary["weather_advice"] = travel_advice(weather)
-        if warnings:
-            itinerary["weather_warnings"] = warnings
-        else:
-            itinerary.pop("weather_warnings", None)
         db.update_trip(
             trip_id,
             trip["version"],
@@ -859,18 +942,7 @@ async def update_departure_date(
     itinerary_params["departure_date"] = req.departure_date
     city = itinerary.get("city") or params.get("city") or ""
     days = max(1, len(itinerary.get("days", []) or []) or 1)
-    from app.tools.weather import WeatherService, travel_advice
-
-    weather_service = WeatherService()
-    weather = await weather_service.forecast(city, None, None, req.departure_date, days)
-    warnings = await weather_service.warnings(city, None, None)
-    if weather:
-        itinerary["weather"] = weather
-        itinerary["weather_advice"] = travel_advice(weather)
-    if warnings:
-        itinerary["weather_warnings"] = warnings
-    else:
-        itinerary.pop("weather_warnings", None)
+    await _sync_weather(itinerary, city, req.departure_date, days)
     db.update_trip(
         trip_id,
         trip["version"],

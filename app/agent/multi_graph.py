@@ -82,6 +82,10 @@ def _quality_router(state: TravelState) -> str:
 def _router(state: TravelState) -> str:
     if state.get("intent") in ("ask", "chat"):
         return "finish"
+    if state.get("intent") == "adjust":
+        changed = (state.get("task_plan") or {}).get("changed_fields") or []
+        if changed and all(f in ("date", "departure_date") for f in changed):
+            return "synthesis"
     return "dispatch"
 
 
@@ -232,6 +236,22 @@ def create_agent(
         }
 
     async def reflect(state: TravelState) -> dict[str, Any]:
+        changed = (state.get("task_plan") or {}).get("changed_fields") or []
+        only_date = (
+            state.get("intent") == "adjust"
+            and changed
+            and all(f in ("date", "departure_date") for f in changed)
+        )
+        if only_date:
+            plan = state.get("itinerary") or {}
+            return {
+                "agent_results": list(state.get("agent_results") or []),
+                "itinerary": plan,
+                "response": state.get("response", ""),
+                "quality_ok": True,
+                "retry_count": state.get("retry_count", 0),
+                "reflection_feedback": "",
+            }
         result = await reflection_agent.run(
             Subtask(task_id="reflect", type="reflect", params=state.get("params", {})),
             state,
@@ -306,7 +326,7 @@ def create_agent(
     workflow.add_conditional_edges(
         "main_parse",
         _router,
-        {"dispatch": "dispatch", "finish": "finish"},
+        {"dispatch": "dispatch", "finish": "finish", "synthesis": "synthesis"},
     )
     workflow.add_conditional_edges(
         "dispatch",

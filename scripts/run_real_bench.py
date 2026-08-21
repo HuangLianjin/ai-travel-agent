@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from app.security import hash_password  # noqa: E402
 
 BASE = "http://127.0.0.1:8000/api"
 
@@ -33,26 +39,65 @@ PROMPTS = [
     "丽江3天2人，预算4500，喜欢古镇和自然",
     "天津2天1人，预算1500，喜欢美食和城市",
     "福州3天2人，预算3000，喜欢美食和拍照",
+    "哈尔滨3天2人，预算3200，喜欢冰雪和历史",
+    "沈阳2天1人，预算1600，喜欢美食和人文",
+    "济南2天1人，预算1500，喜欢泉水和文化",
+    "郑州2天1人，预算1400，喜欢历史和小吃",
+    "合肥2天1人，预算1500，喜欢自然和美食",
+    "南昌3天2人，预算2600，喜欢历史和美食",
+    "昆明3天2人，预算3800，喜欢自然和慢节奏",
+    "贵阳3天2人，预算3000，喜欢山水和美食",
+    "南宁2天1人，预算1600，喜欢小吃和城市",
+    "海口3天2人，预算3500，喜欢海边和美食",
+    "兰州2天1人，预算1400，喜欢面和人文",
+    "西宁3天2人，预算3200，喜欢自然和历史",
+    "银川2天1人，预算1500，喜欢人文和自然",
+    "乌鲁木齐3天2人，预算3800，喜欢美食和自然",
+    "拉萨4天2人，预算6000，喜欢文化和自然",
+    "珠海2天1人，预算1800，喜欢海边和夜景",
+    "泉州3天2人，预算2800，喜欢美食和历史",
+    "温州2天1人，预算1500，喜欢山水和美食",
+    "洛阳3天2人，预算2600，喜欢历史和美食",
+    "张家界4天2人，预算5000，喜欢自然和拍照",
 ]
+
+
+def ensure_user(db_path: str, username: str, password: str, phone: str) -> int:
+    con = sqlite3.connect(db_path)
+    try:
+        row = con.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        if row:
+            return int(row[0])
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        cur = con.execute(
+            "INSERT INTO users (username, password_hash, role, status, created_at, phone, phone_verified) "
+            "VALUES (?, ?, 'user', 'active', ?, ?, 1)",
+            (username, hash_password(password), now, phone),
+        )
+        con.commit()
+        return int(cur.lastrowid)
+    finally:
+        con.close()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument("--output", default="data/bench_results.json")
+    parser.add_argument("--db", default=str(ROOT / "data" / "travel.db"))
     args = parser.parse_args()
 
     suffix = str(int(time.time()))[-6:]
     username = f"bench_{suffix}"
-    password = "bench123"
+    password = "BenchPass#2026"
+    phone = f"139{suffix}0001"
     client = httpx.Client(timeout=300)
 
-    reg = client.post(f"{BASE}/auth/register", json={"username": username, "password": password})
-    if reg.status_code not in (200, 409):
-        print("register failed", reg.status_code, reg.text)
-        return
+    ensure_user(args.db, username, password, phone)
     login = client.post(f"{BASE}/auth/login", json={"username": username, "password": password})
-    login.raise_for_status()
+    if login.status_code != 200:
+        print("login failed", login.status_code, login.text)
+        return
     token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 

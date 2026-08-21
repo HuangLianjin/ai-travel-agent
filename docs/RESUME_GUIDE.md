@@ -5,9 +5,9 @@
 - GitHub：https://github.com/HuangLianjin/ai-travel-agent
 - CI：[GitHub Actions](https://github.com/HuangLianjin/ai-travel-agent/actions/workflows/ci.yml)
 - 一键启动：`start.ps1` / `start.sh` / `docker compose up -d --build`
-- 测试：pytest 11/11；业务评测 24/24；主 Agent 24/24；20 城真实基准 20/20
+- 测试：pytest 11/11；业务评测 24/24；主 Agent 24/24；40 城真实基准 40/40
 - 演示账号：`demo/demo123`、`admin/admin123`
-- 在线演示：部署后填写 `https://ai-travel-agent.onrender.com`
+- 在线演示：已部署到云服务器，演示地址面试时提供，不公开在仓库
 
 ## 一、简历项目描述模板
 
@@ -51,14 +51,14 @@ AI 旅行规划平台（可在线演示）
 
 ## 五、真实运行数据（2026-08-21）
 
-基于 20 个城市真实行程生成基准：
+基于 40 个城市真实行程生成基准：
 
-- 生成次数：20
-- 成功率：100%（20/20）
-- 平均耗时：28.1s
-- P95 耗时：37.8s
-- 总 Token：75,475
-- 预估成本：约 0.39 元（按 DeepSeek 价格估算）
+- 生成次数：40
+- 成功率：100%（40/40）
+- 平均耗时：39.6s
+- P95 耗时：47.2s
+- 总 Token：150,590
+- 预估成本：约 0.79 元（按 DeepSeek 价格估算）
 
 报告文件：`docs/bench_report.json`
 

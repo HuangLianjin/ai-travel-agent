@@ -1,21 +1,21 @@
 {
-  "generated_at": "2026-08-21T04:15:36+00:00",
-  "total_runs": 20,
-  "success_runs": 20,
+  "generated_at": "2026-08-21T16:25:57+00:00",
+  "total_runs": 40,
+  "success_runs": 40,
   "failed_runs": 0,
   "success_rate": 1.0,
-  "avg_latency_ms": 28085.95,
-  "p95_latency_ms": 37767,
-  "prompt_tokens": 34815,
-  "completion_tokens": 40660,
-  "total_tokens": 75475,
-  "estimated_cost_yuan": 0.3949,
+  "avg_latency_ms": 39609.28,
+  "p95_latency_ms": 47180,
+  "prompt_tokens": 69683,
+  "completion_tokens": 80907,
+  "total_tokens": 150590,
+  "estimated_cost_yuan": 0.7866,
   "input_price_per_1m": 2.0,
   "output_price_per_1m": 8.0,
   "by_intent": {
-    "create": 20
+    "create": 40
   },
   "by_status": {
-    "success": 20
+    "success": 40
   }
 }
