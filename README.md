@@ -95,6 +95,7 @@ python -m app.eval.runner --output data/eval_report.json
 - 产品思考与面试叙事：[docs/INTERVIEW_NARRATIVE.md](docs/INTERVIEW_NARRATIVE.md)
 - GitHub 上传与在线演示：[docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)
 - Render 在线部署：[docs/RENDER_DEPLOY.md](docs/RENDER_DEPLOY.md)
+- 国内轻量服务器部署：[docs/CHINA_CLOUD_DEPLOY.md](docs/CHINA_CLOUD_DEPLOY.md)
 
 ## 注意
 
