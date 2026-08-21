@@ -12,7 +12,7 @@
 
 ## 2. 上传代码
 
-Hugging Face Docker Space 固定读取仓库根目录的 `Dockerfile`，本项目根目录 `Dockerfile` 已支持：
+Hugging Face Docker Space 固定读取仓库根目录的 `Dockerfile`，本项目根目录 `Dockerfile` 已处理端口 7860 和非 root 用户要求：
 
 ```powershell
 cd D:/GitHub/ai-travel-agent
