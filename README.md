@@ -65,6 +65,7 @@ python -m app.eval.runner --output data/eval_report.json
 - 上线执行手册：[docs/GO_LIVE_CHECKLIST.md](docs/GO_LIVE_CHECKLIST.md)
 - 多智能体计划：[docs/MULTI_AGENT_PLAN.md](docs/MULTI_AGENT_PLAN.md)
 - 优化计划与落地状态：[docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md)
+- 生产化升级计划：[docs/PRODUCTION_UPGRADE_PLAN.md](docs/PRODUCTION_UPGRADE_PLAN.md)
 - 简历素材：[docs/RESUME_GUIDE.md](docs/RESUME_GUIDE.md)
 - 面试问答：[docs/INTERVIEW_Q_A.md](docs/INTERVIEW_Q_A.md)
 - GitHub 上传与在线演示：[docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)
