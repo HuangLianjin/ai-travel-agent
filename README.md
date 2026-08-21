@@ -66,6 +66,8 @@ uvicorn app.main:app --port 8000
 
 仓库已包含 `render.yaml` 和 `Dockerfile.prod`。在 Render 连接本仓库后选择 Blueprint 或 Docker Web Service，填入 DeepSeek/Tavily/SerpAPI/高德/和风天气 Key，即可获得公网 HTTPS 演示地址。详细步骤见 [docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)。
 
+如果不想绑卡，也可以使用 Koyeb 免费 Docker 服务部署：见 [docs/KOYEB_DEPLOY.md](docs/KOYEB_DEPLOY.md)。
+
 ## 测试与评测
 
 ```bash
@@ -95,6 +97,7 @@ python -m app.eval.runner --output data/eval_report.json
 - 产品思考与面试叙事：[docs/INTERVIEW_NARRATIVE.md](docs/INTERVIEW_NARRATIVE.md)
 - GitHub 上传与在线演示：[docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)
 - Render 在线部署：[docs/RENDER_DEPLOY.md](docs/RENDER_DEPLOY.md)
+- Koyeb 免绑卡部署：[docs/KOYEB_DEPLOY.md](docs/KOYEB_DEPLOY.md)
 - 国内轻量服务器部署：[docs/CHINA_CLOUD_DEPLOY.md](docs/CHINA_CLOUD_DEPLOY.md)
 
 ## 注意
@@ -102,3 +105,4 @@ python -m app.eval.runner --output data/eval_report.json
 - `.env` 和 `data/` 已在 .gitignore 中，上传 GitHub 时不会包含真实 Key 和数据库。
 - 一键启动会生成 `.env`，默认 `LLM_MODE=demo`；需要真实规划时填入 DeepSeek/OpenAI 与搜索 Key。
 - 安全加固：注册需手机号验证码，登录限流与失败锁定，管理员由 `ADMIN_INIT_PASSWORD` 创建并强制首次改密，支持 TOTP 2FA。
+
