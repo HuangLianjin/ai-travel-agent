@@ -49,6 +49,24 @@ def test_refresh_token_hash_and_revoke(tmp_path):
     assert db.get_refresh_token(token_hash) is None
 
 
+def test_lock_revokes_refresh_tokens(tmp_path):
+    db = Database(str(tmp_path / "lock.db"))
+    db.init_db()
+    uid = db.create_user(
+        "lock_user",
+        "LockPass#2026",
+        phone="13800000003",
+        phone_verified=1,
+    )
+    token, token_hash = create_refresh_token()
+    db.create_refresh_token(uid, token_hash, "2099-01-01T00:00:00+00:00")
+    for _ in range(5):
+        db.record_login_failure("lock_user")
+    user = db.get_user_by_username("lock_user")
+    assert user["locked_until"]
+    assert db.get_refresh_token(token_hash) is None
+
+
 def test_phone_verification_code_flow(tmp_path):
     db = Database(str(tmp_path / "phone.db"))
     db.init_db()

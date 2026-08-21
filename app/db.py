@@ -451,6 +451,7 @@ class Database:
         if count >= settings.max_login_failures:
             locked_until = _now_offset(settings.login_lock_minutes)
             count = 0
+            self.revoke_all_user_refresh_tokens(user["id"])
         self.execute(
             "UPDATE users SET login_failed_count = ?, locked_until = ? WHERE id = ?",
             (count, locked_until, user["id"]),

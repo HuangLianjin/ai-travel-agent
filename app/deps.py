@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import Depends, HTTPException, Request
 
 from app.config import get_settings
@@ -11,6 +13,16 @@ from app.security import decode_token
 
 def get_db(request: Request) -> Database:
     return request.app.state.db
+
+
+def _is_locked(user: dict) -> bool:
+    locked = user.get("locked_until") or ""
+    if not locked:
+        return False
+    try:
+        return datetime.fromisoformat(locked) > datetime.now(timezone.utc)
+    except Exception:
+        return False
 
 
 def get_current_user(
@@ -26,6 +38,8 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="用户不存在")
     if user["status"] in ("banned", "muted"):
         raise HTTPException(status_code=403, detail="账号状态异常")
+    if _is_locked(user):
+        raise HTTPException(status_code=403, detail="账号已锁定，请稍后再试")
     safe_paths = (
         "/api/auth/change-password",
         "/api/auth/2fa/setup",
@@ -66,7 +80,7 @@ async def get_optional_user(
     try:
         payload = decode_token(auth[7:], get_settings())
         user = db.get_user_by_username(payload["sub"])
-        if user and user["status"] in ("active",):
+        if user and user["status"] in ("active",) and not _is_locked(user):
             return user
     except Exception:
         return None
