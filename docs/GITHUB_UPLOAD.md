@@ -30,9 +30,9 @@ git push -u origin main
 
 ### 方式 A：Render（最快）
 
-1. 打开 https://render.com 注册。
-2. New -> Web Service -> Connect GitHub 仓库。
-3. Runtime 选 Docker，Dockerfile 填 `Dockerfile.prod`。
+1. 打开 https://render.com 注册并连接 GitHub。
+2. 推荐 New -> Blueprint：选择本仓库，`render.yaml` 会被自动识别。
+3. 也可以 New -> Web Service -> Runtime 选 Docker，Dockerfile 填 `Dockerfile.prod`。
 4. 在 Environment 里填：
    - SECRET_KEY
    - LLM_MODE=openai

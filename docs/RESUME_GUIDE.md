@@ -1,5 +1,14 @@
 # 星旅 Agent · 简历与面试素材
 
+## 零、成品验收快照（2026-08-21）
+
+- GitHub：https://github.com/HuangLianjin/ai-travel-agent
+- CI：[GitHub Actions](https://github.com/HuangLianjin/ai-travel-agent/actions/workflows/ci.yml)
+- 一键启动：`start.ps1` / `start.sh` / `docker compose up -d --build`
+- 测试：pytest 11/11；业务评测 24/24；主 Agent 24/24；20 城真实基准 20/20
+- 演示账号：`demo/demo123`、`admin/admin123`
+- 在线演示：部署后填写 `https://ai-travel-agent.onrender.com`
+
 ## 一、简历项目描述模板
 
 ```text

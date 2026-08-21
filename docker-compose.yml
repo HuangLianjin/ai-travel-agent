@@ -6,7 +6,8 @@ services:
     container_name: ai-travel-agent
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     ports:
       - "8000:8000"
     volumes:

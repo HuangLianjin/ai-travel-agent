@@ -1,5 +1,7 @@
 # 星旅 Agent · AI 旅行规划平台
 
+[![CI](https://github.com/HuangLianjin/ai-travel-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/HuangLianjin/ai-travel-agent/actions/workflows/ci.yml)
+
 一个可运行的 AI 行程规划平台成品：FastAPI + LangGraph 主 Agent / 子 Agent 编排 + RAG 混合检索 + 真实搜索/高德地图/和风天气 + 多轮对话调整 + 攻略社区 + RBAC 运营后台 + 可观测指标与离线评测。
 
 ## 核心功能
@@ -21,7 +23,29 @@
 
 Python、FastAPI、LangGraph、SQLite、RAG、SSE、Vue 3、高德地图 API、和风天气、Tavily/SerpAPI、Docker、GitHub Actions
 
-## 快速开始
+## 快速开始（一键启动）
+
+Windows：
+
+```powershell
+.\start.ps1
+```
+
+macOS / Linux：
+
+```bash
+./start.sh
+```
+
+脚本会自动完成：复制 `.env.example` 为 `.env`、创建虚拟环境、安装依赖、初始化演示数据，然后启动服务。打开 http://localhost:8000 即可使用。
+
+Docker 一键启动（不需要本机安装 Python）：
+
+```bash
+docker compose up -d --build
+```
+
+手动启动：
 
 ```bash
 python -m venv .venv
@@ -31,18 +55,14 @@ python -m app.seed
 uvicorn app.main:app --port 8000
 ```
 
-打开 http://localhost:8000 即可使用。也可以直接运行 `./start.ps1` 或 `./start.sh` 一键启动。
-
-Docker 启动：
-
-```bash
-docker compose up -d --build
-```
-
 ## 演示账号
 
 - 普通用户：`demo` / `demo123`
 - 管理员：`admin` / `admin123`
+
+## 在线部署（Render）
+
+仓库已包含 `render.yaml` 和 `Dockerfile.prod`。在 Render 连接本仓库后选择 Blueprint 或 Docker Web Service，填入 DeepSeek/Tavily/SerpAPI/高德/和风天气 Key，即可获得公网 HTTPS 演示地址。详细步骤见 [docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)。
 
 ## 测试与评测
 
@@ -75,4 +95,6 @@ python -m app.eval.runner --output data/eval_report.json
 
 ## 注意
 
-`.env` 和 `data/` 已在 .gitignore 中，上传 GitHub 时不会包含真实 Key 和数据库。
+- `.env` 和 `data/` 已在 .gitignore 中，上传 GitHub 时不会包含真实 Key 和数据库。
+- 一键启动会生成 `.env`，默认 `LLM_MODE=demo`；需要真实规划时填入 DeepSeek/OpenAI 与搜索 Key。
+- README 中的 `demo/admin` 是演示账号，公网部署前必须修改。
