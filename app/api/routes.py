@@ -599,6 +599,9 @@ async def list_guides(
     status: str | None = None,
     page: int = 1,
     page_size: int = 6,
+    city: str = "",
+    keyword: str = "",
+    sort: str = "hot",
     db: Database = Depends(get_db),
     user: dict = Depends(require_role("user")),
 ):
@@ -607,6 +610,9 @@ async def list_guides(
         user_id=user["id"],
         page=page,
         page_size=page_size,
+        city=city,
+        keyword=keyword,
+        sort=sort,
     )
     for item in data.get("items", []) or []:
         author = db.query_one(
@@ -752,6 +758,37 @@ async def get_guide(
             guide["trip_itinerary"] = trip.get("itinerary") or {}
     guide["comments"] = db.list_comments(guide_id)
     return guide
+
+
+@router.post("/guides/{guide_id}/copy-trip")
+async def copy_guide_trip(
+    guide_id: str,
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("user")),
+):
+    guide = db.get_guide(guide_id)
+    if not guide:
+        raise HTTPException(status_code=404, detail="攻略不存在")
+    if not guide.get("trip_id"):
+        raise HTTPException(status_code=400, detail="该攻略没有关联行程")
+    trip = db.get_trip(guide["trip_id"])
+    if not trip:
+        raise HTTPException(status_code=400, detail="攻略关联的行程已不存在")
+    params = dict(trip.get("params") or {})
+    params["source_text"] = f"来自攻略：{guide.get('title', '')}"
+    itinerary = trip.get("itinerary") or {}
+    itinerary["params"] = params
+    days = len(itinerary.get("days", []) or []) or params.get("days", 1)
+    travelers = params.get("travelers", 1) or 1
+    trip_id = db.create_trip(
+        user["id"],
+        f"{guide.get('city', '')} · {days}天{travelers}人（攻略）",
+        guide.get("city", "") or trip.get("city", ""),
+        params,
+        itinerary,
+    )
+    audit(db, user["id"], "copy_guide_trip", "guide", guide_id)
+    return {"trip_id": trip_id, "status": "ok"}
 
 
 @router.post("/guides/{guide_id}/like")

@@ -62,6 +62,9 @@ createApp({
       guidePages: 1,
       guideTotal: 0,
       guidePageSize: 4,
+      guideCity: "",
+      guideKeyword: "",
+      guideSort: "hot",
       favorites: [],
       favoritePage: 1,
       favoritePages: 1,
@@ -266,14 +269,6 @@ createApp({
       location.reload();
     },
     switchView(view) {
-      if (view === "plan" && this.tripSource === "open" && !this.sending) {
-        this.trip = null;
-        this.tripId = "";
-        this.tripSource = "";
-        this.dayPage = 1;
-        this.dayPages = 1;
-        this.liveAlerts = [];
-      }
       this.view = view;
       if (view === "trips") this.loadTrips();
       if (view === "guides") {
@@ -320,10 +315,29 @@ createApp({
       this.toastMsg("行程已删除");
     },
     async loadGuides() {
-      const data = await request(`/guides?status=approved&page=${this.guidePage}&page_size=${this.guidePageSize}`);
+      const qs = new URLSearchParams({
+        status: "approved",
+        page: this.guidePage,
+        page_size: this.guidePageSize,
+        city: this.guideCity || "",
+        keyword: this.guideKeyword || "",
+        sort: this.guideSort || "hot",
+      });
+      const data = await request(`/guides?${qs.toString()}`);
       this.guides = data.items || [];
       this.guideTotal = data.total || 0;
       this.guidePages = data.pages || 1;
+    },
+    mapLink(item) {
+      const city = (this.trip && this.trip.city) || (this.viewGuide && this.viewGuide.city) || "";
+      const name = item.name || item.title || "";
+      return item.map_url || `https://uri.amap.com/search?keyword=${encodeURIComponent(name)}&city=${encodeURIComponent(city)}`;
+    },
+    async copyGuideTrip() {
+      if (!this.viewGuide || !this.viewGuide.trip_itinerary) return;
+      await request(`/guides/${this.viewGuide.id}/copy-trip`, { method: "POST" });
+      this.toastMsg("攻略行程已加入我的行程");
+      await this.loadTrips();
     },
     async goGuidePage(page) {
       if (page < 1 || page > this.guidePages) return;
@@ -1093,6 +1107,15 @@ createApp({
                 <button class="btn primary sm" @click="openGuideModal"><i data-lucide="plus"></i> 发布攻略</button>
               </div>
             </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+              <input v-model="guideCity" placeholder="城市" @keyup.enter="goGuidePage(1)" />
+              <input v-model="guideKeyword" placeholder="关键词/兴趣" @keyup.enter="goGuidePage(1)" />
+              <select v-model="guideSort" @change="goGuidePage(1)">
+                <option value="hot">热门</option>
+                <option value="new">最新</option>
+              </select>
+              <button class="btn sm" @click="goGuidePage(1)"><i data-lucide="filter"></i> 筛选</button>
+            </div>
             <div v-if="guides.length===0" class="empty">暂无攻略</div>
             <div v-for="g in guides" :key="g.id" class="guide-item">
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1200,11 +1223,18 @@ createApp({
                 <h4 style="margin:0 0 8px">关联行程</h4>
                 <div v-for="day in viewGuide.trip_itinerary.days" :key="day.day" style="padding:8px 0;border-bottom:1px dashed var(--line)">
                   <b>Day {{ day.day }} · {{ day.theme || "" }}</b>
-                  <div class="small" style="margin-top:4px">景点：{{ (day.attractions || []).map(a => a.name).join('、') || '无' }}</div>
-                  <div class="small">美食：{{ (day.dining || []).map(f => f.name).join('、') || '无' }}</div>
+                  <div class="small" style="margin-top:4px">景点：
+                    <span v-for="a in (day.attractions || [])" :key="a.name" style="margin-right:8px">{{ a.name }} <a :href="mapLink(a)" target="_blank" rel="noopener">地图</a></span>
+                    <span v-if="!day.attractions || !day.attractions.length">无</span>
+                  </div>
+                  <div class="small">美食：
+                    <span v-for="f in (day.dining || [])" :key="f.name" style="margin-right:8px">{{ f.name }} <a :href="mapLink(f)" target="_blank" rel="noopener">地图</a></span>
+                    <span v-if="!day.dining || !day.dining.length">无</span>
+                  </div>
                 </div>
               </div>
               <div class="guide-actions" style="margin-top:12px">
+                <button v-if="viewGuide.trip_itinerary && viewGuide.trip_itinerary.days && viewGuide.trip_itinerary.days.length" class="btn primary sm" @click="copyGuideTrip"><i data-lucide="briefcase"></i> 加入我的行程</button>
                 <button class="btn sm" :class="{primary:viewGuide.liked_by_me}" @click="likeGuide(viewGuide)"><i data-lucide="thumbs-up"></i> {{ viewGuide.liked_by_me ? '已赞' : '点赞' }} {{ viewGuide.likes }}</button>
                 <button class="btn sm" :class="{primary:viewGuide.favorited_by_me}" @click="favoriteGuide(viewGuide)"><i data-lucide="heart"></i> {{ viewGuide.favorited_by_me ? '已收藏' : '收藏' }}</button>
               </div>

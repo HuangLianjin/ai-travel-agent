@@ -751,22 +751,42 @@ class Database:
         user_id: int | None = None,
         page: int = 1,
         page_size: int = 10,
+        city: str = "",
+        keyword: str = "",
+        sort: str = "hot",
     ) -> dict:
-        where = ""
-        params: list = []
+        conditions: list[str] = []
+        params: list[Any] = []
         if status:
-            where = "WHERE status = ?"
+            conditions.append("g.status = ?")
             params.append(status)
+        if city:
+            conditions.append("g.city LIKE ?")
+            params.append(f"%{city}%")
+        if keyword:
+            conditions.append("(g.title LIKE ? OR g.content LIKE ?)")
+            params.append(f"%{keyword}%")
+            params.append(f"%{keyword}%")
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
         total = self.query_one(
-            f"SELECT COUNT(*) AS n FROM guides {where}", tuple(params)
+            f"SELECT COUNT(*) AS n FROM guides g {where}", tuple(params)
         )["n"]
         page = max(1, int(page))
         page_size = max(1, min(20, int(page_size)))
         offset = (page - 1) * page_size
+        if sort == "hot":
+            order_by = (
+                "(g.likes * 3 + g.favorites * 5 + "
+                "(SELECT COUNT(*) FROM comments c WHERE c.guide_id = g.id) * 2 "
+                "+ g.views * 0.1) DESC, g.created_at DESC"
+            )
+        else:
+            order_by = "g.created_at DESC"
         rows = [
             self._decode_guide(r)
             for r in self.query_all(
-                f"SELECT * FROM guides {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                f"SELECT g.* FROM guides g {where} "
+                f"ORDER BY {order_by} LIMIT ? OFFSET ?",
                 tuple(params + [page_size, offset]),
             )
         ]
