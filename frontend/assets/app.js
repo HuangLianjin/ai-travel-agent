@@ -619,6 +619,15 @@ createApp({
       if (page < 1 || page > this.guidePages) return;
       this.guidePage = page;
       await this.loadGuides();
+      this.$nextTick(() => {
+        const el = this.$refs.guidesPanel;
+        if (el) {
+          window.scrollTo({
+            top: el.getBoundingClientRect().top + window.scrollY - 12,
+            behavior: "auto",
+          });
+        }
+      });
     },
     async loadFavorites() {
       const data = await request(`/favorites?page=${this.favoritePage}&page_size=${this.favoritePageSize}`);
@@ -1492,7 +1501,7 @@ createApp({
             </div>
           </div>
 
-          <div v-else-if="view==='guides'" class="card">
+          <div v-else-if="view==='guides'" class="card" ref="guidesPanel">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap">
               <h3 style="margin:0">攻略广场</h3>
               <div style="display:flex;gap:8px">
