@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: ai-travel-agent
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.prod
+    healthCheckPath: /api/health
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: LLM_MODE
+        value: openai
+      - key: OPENAI_BASE_URL
+        value: https://api.deepseek.com/v1
+      - key: MODEL_NAME
+        value: deepseek-chat
+      - key: SEARCH_PROVIDER
+        value: auto
+      - key: CONTENT_SOURCE_ENABLED
+        value: "true"
+      - key: CONTENT_SOURCE_FETCH_PAGES
+        value: "true"
+      - key: CONTENT_SOURCE_MAX_PAGES
+        value: "3"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: SERPAPI_API_KEY
+        sync: false
+      - key: MAP_MCP_API_KEY
+        sync: false
+      - key: QWEATHER_API_KEY
+        sync: false
+      - key: QWEATHER_API_HOST
+        sync: false
