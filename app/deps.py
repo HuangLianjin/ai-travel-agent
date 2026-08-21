@@ -26,6 +26,24 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="用户不存在")
     if user["status"] in ("banned", "muted"):
         raise HTTPException(status_code=403, detail="账号状态异常")
+    safe_paths = (
+        "/api/auth/change-password",
+        "/api/auth/2fa/setup",
+        "/api/auth/2fa/enable",
+        "/api/auth/2fa/disable",
+        "/api/auth/logout",
+        "/api/profile/me",
+    )
+    if user.get("must_change_password") and request.url.path not in safe_paths:
+        raise HTTPException(status_code=403, detail="请先修改默认密码")
+    return user
+
+
+def require_verified(
+    user: dict = Depends(get_current_user),
+) -> dict:
+    if not user.get("email_verified"):
+        raise HTTPException(status_code=403, detail="请先完成邮箱验证")
     return user
 
 

@@ -7,12 +7,47 @@ from pydantic import BaseModel, Field
 
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=32)
-    password: str = Field(min_length=6, max_length=64)
+    password: str = Field(min_length=8, max_length=64)
+    email: str
 
 
 class LoginRequest(BaseModel):
     username: str
     password: str
+    totp_code: str = ""
+
+
+class VerifyEmailRequest(BaseModel):
+    username: str
+    code: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str = Field(min_length=8, max_length=64)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str = Field(min_length=8, max_length=64)
+
+
+class TotpRequest(BaseModel):
+    code: str
+
+
+class TotpEnableRequest(BaseModel):
+    secret: str
+    code: str
 
 
 class ChatRequest(BaseModel):

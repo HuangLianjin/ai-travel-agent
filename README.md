@@ -39,6 +39,8 @@ macOS / Linux：
 
 脚本会自动完成：复制 `.env.example` 为 `.env`、创建虚拟环境、安装依赖、初始化演示数据，然后启动服务。打开 http://localhost:8000 即可使用。
 
+默认不创建演示账号；需要体验演示账号时，在 `.env` 里设置 `DEMO_SEED_ENABLED=true`。
+
 Docker 一键启动（不需要本机安装 Python）：
 
 ```bash
@@ -57,8 +59,8 @@ uvicorn app.main:app --port 8000
 
 ## 演示账号
 
-- 普通用户：`demo` / `demo123`
-- 管理员：`admin` / `admin123`
+- 普通用户：`demo` / `demo123`（需设置 `DEMO_SEED_ENABLED=true` 后自动创建）
+- 管理员：通过 `ADMIN_INIT_PASSWORD` 初始化，首次登录强制修改密码，不再提供公开默认密码
 
 ## 在线部署（Render）
 
@@ -97,4 +99,4 @@ python -m app.eval.runner --output data/eval_report.json
 
 - `.env` 和 `data/` 已在 .gitignore 中，上传 GitHub 时不会包含真实 Key 和数据库。
 - 一键启动会生成 `.env`，默认 `LLM_MODE=demo`；需要真实规划时填入 DeepSeek/OpenAI 与搜索 Key。
-- README 中的 `demo/admin` 是演示账号，公网部署前必须修改。
+- 安全加固：注册需邮箱验证，登录限流与失败锁定，管理员由 `ADMIN_INIT_PASSWORD` 创建并强制首次改密，支持 TOTP 2FA。

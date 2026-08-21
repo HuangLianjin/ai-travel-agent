@@ -3,35 +3,62 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from collections import deque
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from app.agent.graph import create_agent
 from app.config import get_settings
 from app.db import Database
-from app.deps import get_current_user, get_db, get_optional_user, require_role
+from app.deps import (
+    get_current_user,
+    get_db,
+    get_optional_user,
+    require_role,
+    require_verified,
+)
 from app.eval.runner import run_demo_eval
 from app.llm import get_llm
 from app.observability.audit import audit
 from app.observability.metrics import metrics
 from app.rag.search import HybridSearcher
 from app.schemas import (
+    ChangePasswordRequest,
     ChatRequest,
     CommentCreate,
     DepartureDateUpdate,
     FollowUpdate,
+    ForgotPasswordRequest,
     GuideCreate,
     LoginRequest,
     ProfileUpdate,
+    RefreshRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     ReviewDecision,
+    TotpEnableRequest,
+    TotpRequest,
+    VerifyEmailRequest,
 )
-from app.security import create_token, verify_password
+from app.mailer import send_code_email
+from app.security import (
+    create_access_token,
+    create_refresh_token,
+    generate_totp_secret,
+    generate_verification_code,
+    hash_password,
+    hash_token,
+    totp_uri,
+    validate_password_policy,
+    verify_password,
+    verify_totp,
+)
 from app.services.planner import _recompute_costs, build_itinerary
 from app.services.price_enrich import enrich_plan_with_prices
 
@@ -52,39 +79,304 @@ def _rate_limit(key: str) -> None:
     bucket.append(now)
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
+def _rate_limit_window(key: str, limit: int, window_seconds: int) -> None:
+    now = time.time()
+    bucket = _rate_buckets.setdefault(key, deque())
+    while bucket and bucket[0] < now - window_seconds:
+        bucket.popleft()
+    if len(bucket) >= limit:
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+    bucket.append(now)
+
+
+def _is_locked(user: dict) -> bool:
+    locked = user.get("locked_until") or ""
+    if not locked:
+        return False
+    try:
+        return datetime.fromisoformat(locked) > datetime.now(timezone.utc)
+    except Exception:
+        return False
+
+
 @router.post("/auth/register")
 async def register(
     req: RegisterRequest,
+    request: Request,
     db: Database = Depends(get_db),
 ):
-    if db.get_user_by_username(req.username):
+    settings = get_settings()
+    _rate_limit_window(
+        f"register:{_client_ip(request)}", settings.auth_register_per_hour, 3600
+    )
+    username = req.username.strip()
+    email = req.email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="邮箱格式不正确")
+    if db.get_user_by_username(username):
         raise HTTPException(status_code=409, detail="用户名已存在")
-    db.create_user(req.username, req.password)
-    audit(db, None, "register", detail=req.username)
+    if db.get_user_by_email(email):
+        raise HTTPException(status_code=409, detail="邮箱已被注册")
+    try:
+        validate_password_policy(username, req.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    code = generate_verification_code()
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(
+        timespec="seconds"
+    )
+    user_id = db.create_user(username, req.password, email=email, email_verified=0)
+    db.set_verification_code(user_id, code, expires)
+    sent = send_code_email(email, code, "verify")
+    audit(db, user_id, "register", detail=username)
+    db.record_login_audit(
+        username,
+        True,
+        _client_ip(request),
+        request.headers.get("user-agent", ""),
+        "register",
+    )
+    return {"status": "ok", "email_sent": sent}
+
+
+@router.post("/auth/verify-email")
+async def verify_email(
+    req: VerifyEmailRequest,
+    db: Database = Depends(get_db),
+):
+    user = db.get_user_by_username(req.username.strip())
+    if not user:
+        raise HTTPException(status_code=400, detail="用户不存在")
+    if user.get("email_verified"):
+        return {"status": "ok"}
+    if not user.get("verification_code") or not user.get("verification_expires_at"):
+        raise HTTPException(status_code=400, detail="验证码不存在或已失效")
+    if user["verification_expires_at"] < datetime.now(timezone.utc).isoformat(
+        timespec="seconds"
+    ):
+        raise HTTPException(status_code=400, detail="验证码已过期")
+    if req.code.strip() != user["verification_code"]:
+        raise HTTPException(status_code=400, detail="验证码错误")
+    db.set_email_verified(user["id"])
+    db.set_verification_code(user["id"], "", "")
+    audit(db, user["id"], "verify_email", detail=user["username"])
     return {"status": "ok"}
 
 
 @router.post("/auth/login")
 async def login(
     req: LoginRequest,
+    request: Request,
     db: Database = Depends(get_db),
 ):
-    user = db.get_user_by_username(req.username)
+    settings = get_settings()
+    ip = _client_ip(request)
+    ua = request.headers.get("user-agent", "")
+    _rate_limit_window(f"login_ip:{ip}", settings.auth_login_per_minute, 60)
+    _rate_limit_window(
+        f"login_user:{req.username.strip().lower()}",
+        settings.auth_login_per_hour,
+        3600,
+    )
+    user = db.get_user_by_username(req.username.strip())
+    if user and _is_locked(user):
+        db.record_login_audit(req.username, False, ip, ua, "locked")
+        raise HTTPException(status_code=423, detail="账号已锁定，请稍后再试")
     if not user or not verify_password(req.password, user["password_hash"]):
+        if user:
+            db.record_login_failure(user["username"])
+        db.record_login_audit(req.username, False, ip, ua, "bad_password")
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if user["status"] == "banned":
+        db.record_login_audit(req.username, False, ip, ua, "banned")
         raise HTTPException(status_code=403, detail="账号已被封禁")
-    token = create_token(user["username"], user["role"], get_settings())
+    if user.get("totp_secret") and (
+        not req.totp_code or not verify_totp(user["totp_secret"], req.totp_code)
+    ):
+        db.record_login_audit(req.username, False, ip, ua, "bad_totp")
+        raise HTTPException(status_code=401, detail="动态验证码错误")
+    db.reset_login_failures(user["id"])
+    db.set_last_login(user["id"], ip)
+    db.record_login_audit(req.username, True, ip, ua, "login")
+    access_token = create_access_token(user["username"], user["role"], settings)
+    refresh_plain, refresh_hash = create_refresh_token()
+    expires = (datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_ttl_days)).isoformat(
+        timespec="seconds"
+    )
+    db.create_refresh_token(user["id"], refresh_hash, expires)
     audit(db, user["id"], "login")
     return {
-        "access_token": token,
+        "access_token": access_token,
+        "refresh_token": refresh_plain,
         "token_type": "bearer",
+        "email_verified": bool(user.get("email_verified")),
+        "must_change_password": bool(user.get("must_change_password")),
         "user": {
             "id": user["id"],
             "username": user["username"],
             "role": user["role"],
         },
     }
+
+
+@router.post("/auth/refresh")
+async def refresh_token(
+    req: RefreshRequest,
+    db: Database = Depends(get_db),
+):
+    row = db.get_refresh_token(hash_token(req.refresh_token))
+    if not row or row["expires_at"] < datetime.now(timezone.utc).isoformat(
+        timespec="seconds"
+    ):
+        raise HTTPException(status_code=401, detail="登录已过期")
+    user = db.get_user_by_id(row["user_id"])
+    if not user or user["status"] == "banned":
+        raise HTTPException(status_code=401, detail="账号不可用")
+    settings = get_settings()
+    access_token = create_access_token(user["username"], user["role"], settings)
+    db.revoke_refresh_token(row["token_hash"])
+    refresh_plain, refresh_hash = create_refresh_token()
+    expires = (datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_ttl_days)).isoformat(
+        timespec="seconds"
+    )
+    db.create_refresh_token(user["id"], refresh_hash, expires)
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_plain,
+        "token_type": "bearer",
+    }
+
+
+@router.post("/auth/logout")
+async def logout(
+    req: RefreshRequest,
+    db: Database = Depends(get_db),
+):
+    db.revoke_refresh_token(hash_token(req.refresh_token))
+    return {"status": "ok"}
+
+
+@router.post("/auth/change-password")
+async def change_password(
+    req: ChangePasswordRequest,
+    db: Database = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    if not verify_password(req.old_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="原密码错误")
+    try:
+        validate_password_policy(user["username"], req.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.update_password(user["id"], hash_password(req.new_password))
+    db.revoke_all_user_refresh_tokens(user["id"])
+    audit(db, user["id"], "change_password")
+    return {"status": "ok"}
+
+
+@router.post("/auth/forgot-password")
+async def forgot_password(
+    req: ForgotPasswordRequest,
+    request: Request,
+    db: Database = Depends(get_db),
+):
+    settings = get_settings()
+    _rate_limit_window(f"forgot:{_client_ip(request)}", 3, 3600)
+    email = req.email.strip().lower()
+    user = db.get_user_by_email(email)
+    if user:
+        code = generate_verification_code()
+        expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(
+            timespec="seconds"
+        )
+        db.set_verification_code(user["id"], code, expires)
+        send_code_email(email, code, "reset")
+        db.record_login_audit(
+            user["username"],
+            True,
+            _client_ip(request),
+            request.headers.get("user-agent", ""),
+            "forgot_password",
+        )
+    return {"status": "ok"}
+
+
+@router.post("/auth/reset-password")
+async def reset_password(
+    req: ResetPasswordRequest,
+    db: Database = Depends(get_db),
+):
+    user = db.get_user_by_email(req.email.strip().lower())
+    if not user:
+        raise HTTPException(status_code=400, detail="用户不存在")
+    if not user.get("verification_code") or user["verification_expires_at"] < datetime.now(
+        timezone.utc
+    ).isoformat(timespec="seconds"):
+        raise HTTPException(status_code=400, detail="验证码已过期")
+    if req.code.strip() != user["verification_code"]:
+        raise HTTPException(status_code=400, detail="验证码错误")
+    try:
+        validate_password_policy(user["username"], req.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.update_password(user["id"], hash_password(req.new_password))
+    db.set_verification_code(user["id"], "", "")
+    db.revoke_all_user_refresh_tokens(user["id"])
+    audit(db, user["id"], "reset_password")
+    return {"status": "ok"}
+
+
+@router.get("/auth/2fa/setup")
+async def twofa_setup(
+    user: dict = Depends(get_current_user),
+):
+    if user.get("totp_secret"):
+        raise HTTPException(status_code=400, detail="已绑定动态口令")
+    secret = generate_totp_secret()
+    return {
+        "secret": secret,
+        "uri": totp_uri(secret, user["username"], get_settings().totp_issuer),
+    }
+
+
+@router.post("/auth/2fa/enable")
+async def twofa_enable(
+    req: TotpEnableRequest,
+    db: Database = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    if user.get("totp_secret"):
+        raise HTTPException(status_code=400, detail="已绑定动态口令")
+    if not verify_totp(req.secret, req.code):
+        raise HTTPException(status_code=400, detail="动态验证码错误")
+    db.set_totp_secret(user["id"], req.secret.strip().upper())
+    audit(db, user["id"], "enable_2fa")
+    return {"status": "ok"}
+
+
+@router.post("/auth/2fa/disable")
+async def twofa_disable(
+    req: TotpRequest,
+    db: Database = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    if not user.get("totp_secret"):
+        raise HTTPException(status_code=400, detail="未绑定动态口令")
+    if not verify_totp(user["totp_secret"], req.code):
+        raise HTTPException(status_code=400, detail="动态验证码错误")
+    db.set_totp_secret(user["id"], "")
+    audit(db, user["id"], "disable_2fa")
+    return {"status": "ok"}
 
 
 @router.get("/profile/me")
@@ -158,7 +450,7 @@ async def follow_user(
 async def chat(
     req: ChatRequest,
     db: Database = Depends(get_db),
-    user: dict = Depends(require_role("user")),
+    user: dict = Depends(require_verified),
     stream: bool = False,
 ):
     _rate_limit(f"chat:{user['id']}")
@@ -565,7 +857,7 @@ async def update_departure_date(
 async def publish_trip(
     trip_id: str,
     db: Database = Depends(get_db),
-    user: dict = Depends(require_role("user")),
+    user: dict = Depends(require_verified),
 ):
     trip = db.get_trip(trip_id, user["id"])
     if not trip:
@@ -670,7 +962,7 @@ async def create_guide_upload(
     city: str = Form(""),
     images: list[UploadFile] = File(default=[]),
     db: Database = Depends(get_db),
-    user: dict = Depends(require_role("user")),
+    user: dict = Depends(require_verified),
 ):
     if trip_id:
         trip = db.get_trip(trip_id, user["id"])
@@ -975,12 +1267,37 @@ async def admin_set_user_status(
     user_id: int,
     body: dict[str, str],
     db: Database = Depends(get_db),
-    user: dict = Depends(require_role("admin", "super_admin")),
+    user: dict = Depends(require_role("super_admin")),
 ):
     if body.get("status") not in ("active", "muted", "banned"):
         raise HTTPException(status_code=400, detail="无效状态")
+    target = db.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
     db.set_user_status(user_id, body["status"])
-    audit(db, user["id"], "set_user_status", "user", str(user_id), body["status"])
+    audit(
+        db, user["id"], "set_user_status", "user", str(user_id), body["status"]
+    )
+    return {"status": "ok"}
+
+
+@router.post("/admin/users/{user_id}/role")
+async def admin_set_user_role(
+    user_id: int,
+    body: dict[str, str],
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("super_admin")),
+):
+    role = body.get("role", "")
+    if role not in ("user", "admin", "super_admin"):
+        raise HTTPException(status_code=400, detail="无效角色")
+    target = db.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if target["id"] == user["id"]:
+        raise HTTPException(status_code=400, detail="不能修改自己的角色")
+    db.set_user_role(user_id, role)
+    audit(db, user["id"], "set_user_role", "user", str(user_id), role)
     return {"status": "ok"}
 
 
@@ -990,6 +1307,14 @@ async def admin_audit_logs(
     user: dict = Depends(require_role("admin", "super_admin")),
 ):
     return db.list_audit_logs(200)
+
+
+@router.get("/admin/login-audit")
+async def admin_login_audit(
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    return db.list_login_audit(200)
 
 
 @router.get("/admin/recommend-slots")

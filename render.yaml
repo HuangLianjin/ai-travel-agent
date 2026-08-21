@@ -34,3 +34,7 @@ services:
         sync: false
       - key: QWEATHER_API_HOST
         sync: false
+      - key: ADMIN_INIT_PASSWORD
+        sync: false
+      - key: DEMO_SEED_ENABLED
+        value: "false"

@@ -15,6 +15,10 @@ def main() -> None:
     db = Database(settings.db_path)
     db.init_db()
     user = db.get_user_by_username("demo")
+    if not user:
+        print("未启用演示账号，跳过内置攻略初始化")
+        db.close()
+        return
     for doc in build_docs():
         title = doc.get("title") or doc.get("name", "攻略")
         existing = db.query_one(

@@ -44,6 +44,9 @@ git push -u origin main
    - MAP_MCP_API_KEY
    - QWEATHER_API_KEY
    - QWEATHER_API_HOST
+   - ADMIN_INIT_PASSWORD
+   - DEMO_SEED_ENABLED=false
+   - MAIL_ENABLED=false
 5. 部署后打开 Render 分配的 URL。
 
 注意：Render 免费实例没有持久磁盘，SQLite 数据重启后会清空，适合演示，不适合正式存储。

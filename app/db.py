@@ -6,14 +6,21 @@ import json
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.security import hash_password
+from app.config import get_settings
+from app.security import hash_password, verify_password
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _now_offset(minutes: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(
+        timespec="seconds"
+    )
 
 
 class Database:
@@ -144,6 +151,24 @@ class Database:
                     detail TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS refresh_tokens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    token_hash TEXT UNIQUE NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    revoked INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    last_used_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS login_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    success INTEGER NOT NULL DEFAULT 0,
+                    ip TEXT NOT NULL DEFAULT '',
+                    user_agent TEXT NOT NULL DEFAULT '',
+                    detail TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS recommend_slots (
                     slot TEXT PRIMARY KEY,
                     guide_id TEXT NOT NULL DEFAULT '',
@@ -216,6 +241,17 @@ class Database:
             for col, ddl in (
                 ("nickname", "TEXT NOT NULL DEFAULT ''"),
                 ("avatar", "TEXT NOT NULL DEFAULT ''"),
+                ("email", "TEXT NOT NULL DEFAULT ''"),
+                ("email_verified", "INTEGER NOT NULL DEFAULT 0"),
+                ("verification_code", "TEXT NOT NULL DEFAULT ''"),
+                ("verification_expires_at", "TEXT NOT NULL DEFAULT ''"),
+                ("login_failed_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("locked_until", "TEXT NOT NULL DEFAULT ''"),
+                ("must_change_password", "INTEGER NOT NULL DEFAULT 0"),
+                ("totp_secret", "TEXT NOT NULL DEFAULT ''"),
+                ("password_changed_at", "TEXT NOT NULL DEFAULT ''"),
+                ("last_login_at", "TEXT NOT NULL DEFAULT ''"),
+                ("last_login_ip", "TEXT NOT NULL DEFAULT ''"),
             ):
                 if col not in user_cols:
                     self._conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
@@ -232,22 +268,85 @@ class Database:
             self._seed_users()
 
     def _seed_users(self) -> None:
-        if not self.get_user_by_username("demo"):
-            self.create_user("demo", "demo123", role="user")
-        if not self.get_user_by_username("admin"):
-            self.create_user("admin", "admin123", role="super_admin")
+        settings = get_settings()
+        if settings.demo_seed_enabled and not self.get_user_by_username("demo"):
+            self.create_user(
+                "demo",
+                "demo123",
+                role="user",
+                email="demo@example.com",
+                email_verified=1,
+            )
+        demo = self.get_user_by_username("demo")
+        if demo and not demo.get("email"):
+            self.execute(
+                "UPDATE users SET email = 'demo@example.com', email_verified = 1 "
+                "WHERE id = ?",
+                (demo["id"],),
+            )
+        admin = self.get_user_by_username("admin")
+        if admin and not admin.get("email"):
+            self.execute(
+                "UPDATE users SET email = 'admin@example.com', email_verified = 1 "
+                "WHERE id = ?",
+                (admin["id"],),
+            )
+        if not admin and settings.admin_init_password:
+            self.create_user(
+                "admin",
+                settings.admin_init_password,
+                role="super_admin",
+                email="admin@example.com",
+                email_verified=1,
+                must_change_password=1,
+            )
+        elif (
+            admin
+            and admin.get("role") in ("admin", "super_admin")
+            and verify_password("admin123", admin["password_hash"])
+        ):
+            self.execute(
+                "UPDATE users SET must_change_password = 1 WHERE id = ?",
+                (admin["id"],),
+            )
 
     # ==================== 用户 ====================
 
-    def create_user(self, username: str, password: str, role: str = "user") -> int:
+    def create_user(
+        self,
+        username: str,
+        password: str,
+        role: str = "user",
+        email: str = "",
+        email_verified: int = 0,
+        must_change_password: int = 0,
+    ) -> int:
         return self.execute(
-            "INSERT INTO users (username, password_hash, role, status, created_at) "
-            "VALUES (?, ?, ?, 'active', ?)",
-            (username, hash_password(password), role, _now()),
+            "INSERT INTO users (username, password_hash, role, status, created_at, "
+            "email, email_verified, must_change_password) "
+            "VALUES (?, ?, ?, 'active', ?, ?, ?, ?)",
+            (
+                username,
+                hash_password(password),
+                role,
+                _now(),
+                email,
+                email_verified,
+                must_change_password,
+            ),
         )
 
     def get_user_by_username(self, username: str) -> dict | None:
         return self.query_one("SELECT * FROM users WHERE username = ?", (username,))
+
+    def get_user_by_email(self, email: str) -> dict | None:
+        return self.query_one(
+            "SELECT * FROM users WHERE email = ? AND email != ''",
+            (email.lower(),),
+        )
+
+    def get_user_by_id(self, user_id: int) -> dict | None:
+        return self.query_one("SELECT * FROM users WHERE id = ?", (user_id,))
 
     def list_users(self) -> list[dict]:
         return self.query_all(
@@ -257,6 +356,113 @@ class Database:
     def set_user_status(self, user_id: int, status: str) -> None:
         self.execute(
             "UPDATE users SET status = ? WHERE id = ?", (status, user_id)
+        )
+
+    def set_user_role(self, user_id: int, role: str) -> None:
+        self.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+
+    def set_email_verified(self, user_id: int) -> None:
+        self.execute(
+            "UPDATE users SET email_verified = 1 WHERE id = ?", (user_id,)
+        )
+
+    def set_verification_code(self, user_id: int, code: str, expires_at: str) -> None:
+        self.execute(
+            "UPDATE users SET verification_code = ?, verification_expires_at = ? "
+            "WHERE id = ?",
+            (code, expires_at, user_id),
+        )
+
+    def record_login_failure(self, username: str) -> int:
+        user = self.get_user_by_username(username)
+        if not user:
+            return 0
+        settings = get_settings()
+        count = int(user.get("login_failed_count") or 0) + 1
+        locked_until = ""
+        if count >= settings.max_login_failures:
+            locked_until = _now_offset(settings.login_lock_minutes)
+            count = 0
+        self.execute(
+            "UPDATE users SET login_failed_count = ?, locked_until = ? WHERE id = ?",
+            (count, locked_until, user["id"]),
+        )
+        return count
+
+    def reset_login_failures(self, user_id: int) -> None:
+        self.execute(
+            "UPDATE users SET login_failed_count = 0, locked_until = '' WHERE id = ?",
+            (user_id,),
+        )
+
+    def update_password(self, user_id: int, password_hash: str) -> None:
+        self.execute(
+            "UPDATE users SET password_hash = ?, password_changed_at = ?, "
+            "must_change_password = 0, verification_code = '', "
+            "verification_expires_at = '' WHERE id = ?",
+            (password_hash, _now(), user_id),
+        )
+
+    def set_must_change_password(self, user_id: int, value: int) -> None:
+        self.execute(
+            "UPDATE users SET must_change_password = ? WHERE id = ?",
+            (value, user_id),
+        )
+
+    def set_totp_secret(self, user_id: int, secret: str) -> None:
+        self.execute(
+            "UPDATE users SET totp_secret = ? WHERE id = ?", (secret, user_id)
+        )
+
+    def set_last_login(self, user_id: int, ip: str) -> None:
+        self.execute(
+            "UPDATE users SET last_login_at = ?, last_login_ip = ? WHERE id = ?",
+            (_now(), ip, user_id),
+        )
+
+    def create_refresh_token(
+        self, user_id: int, token_hash: str, expires_at: str
+    ) -> int:
+        return self.execute(
+            "INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, token_hash, expires_at, _now()),
+        )
+
+    def get_refresh_token(self, token_hash: str) -> dict | None:
+        return self.query_one(
+            "SELECT * FROM refresh_tokens WHERE token_hash = ? AND revoked = 0",
+            (token_hash,),
+        )
+
+    def revoke_refresh_token(self, token_hash: str) -> None:
+        self.execute(
+            "UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ?",
+            (token_hash,),
+        )
+
+    def revoke_all_user_refresh_tokens(self, user_id: int) -> None:
+        self.execute(
+            "UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?", (user_id,)
+        )
+
+    def record_login_audit(
+        self,
+        username: str,
+        success: bool,
+        ip: str = "",
+        user_agent: str = "",
+        detail: str = "",
+    ) -> None:
+        self.execute(
+            "INSERT INTO login_audit (username, success, ip, user_agent, detail, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (username, 1 if success else 0, ip, user_agent, detail, _now()),
+        )
+
+    def list_login_audit(self, limit: int = 200) -> list[dict]:
+        return self.query_all(
+            "SELECT * FROM login_audit ORDER BY id DESC LIMIT ?", (limit,)
         )
 
     def update_user_profile(
@@ -278,7 +484,8 @@ class Database:
         self, user_id: int, viewer_id: int | None = None
     ) -> dict | None:
         user = self.query_one(
-            "SELECT id, username, nickname, avatar FROM users WHERE id = ?",
+            "SELECT id, username, nickname, avatar, email_verified, totp_secret "
+            "FROM users WHERE id = ?",
             (user_id,),
         )
         if not user:
@@ -297,13 +504,17 @@ class Database:
                 (viewer_id, user_id),
             )
         )
-        return {
+        result = {
             **user,
             "nickname": user.get("nickname") or user.get("username") or "",
             "following_count": following,
             "followers_count": followers,
             "is_following": is_following,
+            "email_verified": bool(user.get("email_verified")),
+            "totp_enabled": bool(user.get("totp_secret")) if viewer_id == user_id else False,
         }
+        result.pop("totp_secret", None)
+        return result
 
     def follow_user(self, follower_id: int, followee_id: int, follow: bool) -> None:
         if follow:

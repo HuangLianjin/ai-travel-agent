@@ -7,7 +7,22 @@ function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-async function request(path, options = {}) {
+async function refreshTokens() {
+  const rt = localStorage.getItem("refresh_token");
+  if (!rt) return false;
+  const res = await fetch(`${apiBase}/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: rt }),
+  });
+  if (!res.ok) return false;
+  const data = await res.json();
+  localStorage.setItem("token", data.access_token);
+  localStorage.setItem("refresh_token", data.refresh_token);
+  return true;
+}
+
+async function request(path, options = {}, retry = true) {
   const res = await fetch(`${apiBase}${path}`, {
     ...options,
     headers: {
@@ -16,8 +31,12 @@ async function request(path, options = {}) {
       ...(options.headers || {}),
     },
   });
+  if (res.status === 401 && retry && (await refreshTokens())) {
+    return request(path, options, false);
+  }
   if (res.status === 401) {
     localStorage.removeItem("token");
+    localStorage.removeItem("refresh_token");
     localStorage.removeItem("user");
   }
   const data = await res.json().catch(() => ({}));
@@ -41,6 +60,25 @@ createApp({
       authMode: "login",
       authUsername: "",
       authPassword: "",
+      authEmail: "",
+      authConfirm: "",
+      authCode: "",
+      authError: "",
+      authNotice: "",
+      show2fa: false,
+      twofaCode: "",
+      verifyEmailModal: false,
+      verifyEmailCode: "",
+      securityModal: false,
+      securityTab: "password",
+      forcePasswordChange: false,
+      changeOldPassword: "",
+      changeNewPassword: "",
+      changeConfirmPassword: "",
+      pendingTotpSecret: "",
+      pendingTotpUri: "",
+      totpSetupCode: "",
+      totpDisableCode: "",
       sessionId: localStorage.getItem("sessionId") || "",
       view: "plan",
       chatInput: "",
@@ -226,47 +264,225 @@ createApp({
     },
     async login() {
       try {
+        this.authError = "";
         const data = await request("/auth/login", {
           method: "POST",
-          body: JSON.stringify({ username: this.authUsername, password: this.authPassword }),
+          body: JSON.stringify({
+            username: this.authUsername,
+            password: this.authPassword,
+            totp_code: this.show2fa ? this.twofaCode : "",
+          }),
         });
         this.token = data.access_token;
         this.user = data.user;
         localStorage.setItem("token", data.access_token);
+        localStorage.setItem("refresh_token", data.refresh_token || "");
         localStorage.setItem("user", JSON.stringify(data.user));
+        this.show2fa = false;
+        this.twofaCode = "";
+        this.authNotice = "";
         if (!this.sessionId) {
           this.sessionId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
           localStorage.setItem("sessionId", this.sessionId);
         }
+        this.loadMyProfile();
+        if (data.must_change_password) {
+          this.forcePasswordChange = true;
+          this.openSecurityModal("password");
+        } else if (!data.email_verified) {
+          this.verifyEmailModal = true;
+        } else if (this.isAdmin) {
+          this.view = "admin";
+          this.loadAdmin();
+        } else {
+          this.loadAll();
+        }
+      } catch (e) {
+        this.releaseAvatarPreview();
+        if (e.message && e.message.includes("动态验证码")) this.show2fa = true;
+        this.authError = e.message;
+      }
+    },
+    async register() {
+      try {
+        this.authError = "";
+        if (this.authPassword !== this.authConfirm) {
+          this.authError = "两次输入的密码不一致";
+          return;
+        }
+        const data = await request("/auth/register", {
+          method: "POST",
+          body: JSON.stringify({
+            username: this.authUsername,
+            password: this.authPassword,
+            email: this.authEmail,
+          }),
+        });
+        this.authMode = "login";
+        this.authNotice = data.email_sent
+          ? "注册成功，验证码已发送到邮箱"
+          : "注册成功，本地开发模式验证码见服务端日志";
+        this.authUsername = "";
+        this.authPassword = "";
+        this.authConfirm = "";
+      } catch (e) {
+        this.releaseAvatarPreview();
+        this.authError = e.message;
+      }
+    },
+    async verifyEmail() {
+      try {
+        this.authError = "";
+        await request("/auth/verify-email", {
+          method: "POST",
+          body: JSON.stringify({
+            username: this.user.username,
+            code: this.verifyEmailCode,
+          }),
+        });
+        this.verifyEmailModal = false;
+        this.verifyEmailCode = "";
+        this.toastMsg("邮箱验证成功");
         if (this.isAdmin) {
           this.view = "admin";
           this.loadAdmin();
         } else {
           this.loadAll();
         }
+      } catch (e) {
+        this.releaseAvatarPreview();
+        this.authError = e.message;
+      }
+    },
+    async forgotPassword() {
+      try {
+        this.authError = "";
+        await request("/auth/forgot-password", {
+          method: "POST",
+          body: JSON.stringify({ email: this.authEmail }),
+        });
+        this.authMode = "reset";
+        this.authNotice = "如果该邮箱已注册，验证码已发送";
+      } catch (e) {
+        this.releaseAvatarPreview();
+        this.authError = e.message;
+      }
+    },
+    async resetPassword() {
+      try {
+        this.authError = "";
+        if (this.authPassword !== this.authConfirm) {
+          this.authError = "两次输入的密码不一致";
+          return;
+        }
+        await request("/auth/reset-password", {
+          method: "POST",
+          body: JSON.stringify({
+            email: this.authEmail,
+            code: this.authCode,
+            new_password: this.authPassword,
+          }),
+        });
+        this.authMode = "login";
+        this.authNotice = "密码已重置，请重新登录";
+      } catch (e) {
+        this.releaseAvatarPreview();
+        this.authError = e.message;
+      }
+    },
+    async logout() {
+      const rt = localStorage.getItem("refresh_token");
+      if (rt) {
+        try {
+          await fetch(`${apiBase}/auth/logout`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: rt }),
+          });
+        } catch (e) {}
+      }
+      localStorage.removeItem("token");
+      localStorage.removeItem("refresh_token");
+      localStorage.removeItem("user");
+      location.reload();
+    },
+    openSecurityModal(tab) {
+      this.securityTab = tab || "password";
+      this.securityModal = true;
+      this.authError = "";
+      this.$nextTick(() => lucide.createIcons());
+    },
+    closeSecurityModal() {
+      this.securityModal = false;
+      this.forcePasswordChange = false;
+    },
+    async changePassword() {
+      try {
+        this.authError = "";
+        if (this.changeNewPassword !== this.changeConfirmPassword) {
+          this.authError = "两次输入的新密码不一致";
+          return;
+        }
+        await request("/auth/change-password", {
+          method: "POST",
+          body: JSON.stringify({
+            old_password: this.changeOldPassword,
+            new_password: this.changeNewPassword,
+          }),
+        });
+        this.changeOldPassword = "";
+        this.changeNewPassword = "";
+        this.changeConfirmPassword = "";
+        this.toastMsg("密码修改成功");
+        this.closeSecurityModal();
+      } catch (e) {
+        this.releaseAvatarPreview();
+        this.authError = e.message;
+      }
+    },
+    async setup2fa() {
+      try {
+        this.authError = "";
+        const data = await request("/auth/2fa/setup");
+        this.pendingTotpSecret = data.secret;
+        this.pendingTotpUri = data.uri;
+        this.securityTab = "2fa_setup";
+      } catch (e) {
+        this.releaseAvatarPreview();
+        this.authError = e.message;
+      }
+    },
+    async enable2fa() {
+      try {
+        this.authError = "";
+        await request("/auth/2fa/enable", {
+          method: "POST",
+          body: JSON.stringify({ secret: this.pendingTotpSecret, code: this.totpSetupCode }),
+        });
+        this.totpSetupCode = "";
+        this.securityTab = "password";
+        this.toastMsg("动态口令已开启");
         this.loadMyProfile();
       } catch (e) {
         this.releaseAvatarPreview();
-        alert(e.message);
+        this.authError = e.message;
       }
     },
-    async register() {
+    async disable2fa() {
       try {
-        await request("/auth/register", {
+        this.authError = "";
+        await request("/auth/2fa/disable", {
           method: "POST",
-          body: JSON.stringify({ username: this.authUsername, password: this.authPassword }),
+          body: JSON.stringify({ code: this.totpDisableCode }),
         });
-        this.authMode = "login";
-        alert("注册成功，请登录");
+        this.totpDisableCode = "";
+        this.securityTab = "password";
+        this.toastMsg("动态口令已关闭");
+        this.loadMyProfile();
       } catch (e) {
         this.releaseAvatarPreview();
-        alert(e.message);
+        this.authError = e.message;
       }
-    },
-    logout() {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      location.reload();
     },
     switchView(view) {
       this.view = view;
@@ -900,21 +1116,57 @@ createApp({
           <span class="logo"><i data-lucide="map"></i></span>
           <span>星旅 Agent</span>
         </div>
-        <div class="field">
-          <label>用户名</label>
-          <input v-model="authUsername" placeholder="demo / admin" />
+
+        <div v-if="authMode === 'login'">
+          <div class="field">
+            <label>用户名</label>
+            <input v-model="authUsername" placeholder="请输入用户名" />
+          </div>
+          <div class="field">
+            <label>密码</label>
+            <input v-model="authPassword" type="password" placeholder="请输入密码" />
+          </div>
+          <div v-if="show2fa" class="field">
+            <label>动态验证码</label>
+            <input v-model="twofaCode" placeholder="6 位动态验证码" />
+          </div>
+          <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
+          <p v-if="authNotice" class="small muted" style="margin:6px 0">{{ authNotice }}</p>
+          <button class="btn primary block" @click="login"><i data-lucide="log-in"></i> 登录</button>
+          <div style="display:flex;justify-content:space-between;margin-top:10px">
+            <button class="btn sm" @click="authMode='register'">注册新账号</button>
+            <button class="btn sm" @click="authMode='forgot'">忘记密码</button>
+          </div>
         </div>
-        <div class="field">
-          <label>密码</label>
-          <input v-model="authPassword" type="password" placeholder="demo123 / admin123" />
+
+        <div v-else-if="authMode === 'register'">
+          <div class="field"><label>用户名</label><input v-model="authUsername" maxlength="32" /></div>
+          <div class="field"><label>邮箱</label><input v-model="authEmail" type="email" /></div>
+          <div class="field"><label>密码（8 位以上，含字母和数字）</label><input v-model="authPassword" type="password" /></div>
+          <div class="field"><label>确认密码</label><input v-model="authConfirm" type="password" /></div>
+          <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
+          <button class="btn primary block" @click="register">注册</button>
+          <button class="btn block" style="margin-top:8px" @click="authMode='login'">返回登录</button>
         </div>
-        <button class="btn primary block" @click="authMode === 'login' ? login() : register()">
-          {{ authMode === 'login' ? '登录' : '注册' }}
-        </button>
-        <button class="btn block" style="margin-top:8px" @click="authMode = authMode === 'login' ? 'register' : 'login'">
-          {{ authMode === 'login' ? '注册新账号' : '返回登录' }}
-        </button>
-        <p class="small muted" style="margin-top:14px">演示账号：demo/demo123，管理员：admin/admin123</p>
+
+        <div v-else-if="authMode === 'forgot'">
+          <div class="field"><label>邮箱</label><input v-model="authEmail" type="email" /></div>
+          <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
+          <p v-if="authNotice" class="small muted" style="margin:6px 0">{{ authNotice }}</p>
+          <button class="btn primary block" @click="forgotPassword">发送验证码</button>
+          <button class="btn block" style="margin-top:8px" @click="authMode='login'">返回登录</button>
+        </div>
+
+        <div v-else>
+          <div class="field"><label>邮箱</label><input v-model="authEmail" type="email" /></div>
+          <div class="field"><label>验证码</label><input v-model="authCode" /></div>
+          <div class="field"><label>新密码（8 位以上，含字母和数字）</label><input v-model="authPassword" type="password" /></div>
+          <div class="field"><label>确认新密码</label><input v-model="authConfirm" type="password" /></div>
+          <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
+          <p v-if="authNotice" class="small muted" style="margin:6px 0">{{ authNotice }}</p>
+          <button class="btn primary block" @click="resetPassword">重置密码</button>
+          <button class="btn block" style="margin-top:8px" @click="authMode='login'">返回登录</button>
+        </div>
       </div>
     </div>
 
@@ -936,7 +1188,8 @@ createApp({
             <div class="small">{{ profile ? (profile.nickname || profile.username) : currentUserText }}</div>
             <div class="small muted" style="margin-top:2px">{{ profile ? profile.username : "" }}</div>
           </div>
-          <button class="btn sm" @click="logout"><i data-lucide="log-out"></i> 退出</button>
+          <button class="btn sm" @click="openSecurityModal('password')" style="margin-top:8px"><i data-lucide="shield"></i> 安全</button>
+          <button class="btn sm" @click="logout" style="margin-top:8px"><i data-lucide="log-out"></i> 退出</button>
         </div>
       </aside>
 
@@ -1287,6 +1540,61 @@ createApp({
                 <button class="btn sm" :disabled="likedPage <= 1" @click="goLikedPage(likedPage - 1)">上一页</button>
                 <span class="small muted">第 {{ likedPage }} / {{ likedPages }} 页 · 共 {{ likedTotal }} 条</span>
                 <button class="btn sm" :disabled="likedPage >= likedPages" @click="goLikedPage(likedPage + 1)">下一页</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="verifyEmailModal" class="modal-mask" @click.self="verifyEmailModal=false">
+            <div class="modal">
+              <h3 style="margin:0">邮箱验证</h3>
+              <p class="small muted" style="margin-top:8px">验证后才能生成行程和发布攻略。验证码见邮箱；本地开发模式见服务端日志。</p>
+              <div class="field"><label>验证码</label><input v-model="verifyEmailCode" /></div>
+              <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
+              <div class="action-row">
+                <button class="btn sm" @click="verifyEmailModal=false">稍后</button>
+                <button class="btn primary sm" @click="verifyEmail">验证</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="securityModal" class="modal-mask" @click.self="!forcePasswordChange && closeSecurityModal()">
+            <div class="modal">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <h3 style="margin:0">账号安全</h3>
+                <button class="btn sm" v-if="!forcePasswordChange" @click="closeSecurityModal"><i data-lucide="x"></i> 关闭</button>
+              </div>
+              <div style="display:flex;gap:8px;margin:12px 0">
+                <button class="btn sm" :class="{primary: securityTab==='password'}" @click="securityTab='password'">修改密码</button>
+                <button class="btn sm" :class="{primary: securityTab==='2fa'}" @click="securityTab='2fa'">动态口令</button>
+              </div>
+
+              <div v-if="securityTab==='password'">
+                <p v-if="forcePasswordChange" class="small" style="margin:6px 0;color:#c0392b">首次登录请先修改默认密码</p>
+                <div class="field"><label>原密码</label><input v-model="changeOldPassword" type="password" /></div>
+                <div class="field"><label>新密码（8 位以上，含字母和数字）</label><input v-model="changeNewPassword" type="password" /></div>
+                <div class="field"><label>确认新密码</label><input v-model="changeConfirmPassword" type="password" /></div>
+                <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
+                <button class="btn primary block" @click="changePassword">保存新密码</button>
+              </div>
+
+              <div v-else-if="securityTab==='2fa' && !(profile && profile.totp_enabled)">
+                <p class="small muted">开启后登录需要额外输入动态验证码。</p>
+                <button class="btn primary block" @click="setup2fa">开启动态口令</button>
+              </div>
+
+              <div v-else-if="securityTab==='2fa_setup'">
+                <p class="small muted">在 Authenticator / 微信小程序等工具中扫描或手动输入密钥：</p>
+                <div class="field"><label>密钥</label><input :value="pendingTotpSecret" readonly /></div>
+                <div class="field"><label>动态验证码</label><input v-model="totpSetupCode" /></div>
+                <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
+                <button class="btn primary block" @click="enable2fa">确认并开启</button>
+              </div>
+
+              <div v-else>
+                <p class="small muted">当前已开启动态口令，输入验证码后可关闭。</p>
+                <div class="field"><label>动态验证码</label><input v-model="totpDisableCode" /></div>
+                <p v-if="authError" class="small" style="margin:6px 0;color:#c0392b">{{ authError }}</p>
+                <button class="btn block" @click="disable2fa">关闭动态口令</button>
               </div>
             </div>
           </div>

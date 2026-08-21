@@ -26,6 +26,12 @@ def _load_dotenv(path: str) -> None:
 _load_dotenv(PROJECT_ROOT / ".env")
 
 
+def _as_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "星旅 Agent"
@@ -65,6 +71,28 @@ class Settings:
     cors_origins: str = os.getenv(
         "CORS_ORIGINS", "http://localhost:8000,http://localhost:5173"
     )
+
+    # 账号安全
+    access_token_ttl_minutes: int = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "30"))
+    refresh_token_ttl_days: int = int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "7"))
+    max_login_failures: int = int(os.getenv("MAX_LOGIN_FAILURES", "5"))
+    login_lock_minutes: int = int(os.getenv("LOGIN_LOCK_MINUTES", "15"))
+    auth_register_per_hour: int = int(os.getenv("AUTH_REGISTER_PER_HOUR", "5"))
+    auth_login_per_minute: int = int(os.getenv("AUTH_LOGIN_PER_MINUTE", "5"))
+    auth_login_per_hour: int = int(os.getenv("AUTH_LOGIN_PER_HOUR", "10"))
+    totp_issuer: str = os.getenv("TOTP_ISSUER", "星旅 Agent")
+
+    # 邮件验证（本地未配置时验证码打印到服务端日志）
+    mail_enabled: bool = _as_bool(os.getenv("MAIL_ENABLED", "false"), False)
+    smtp_host: str = os.getenv("SMTP_HOST", "")
+    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user: str = os.getenv("SMTP_USER", "")
+    smtp_password: str = os.getenv("SMTP_PASSWORD", "")
+    smtp_from: str = os.getenv("SMTP_FROM", "")
+
+    # 管理员初始化与演示账号
+    admin_init_password: str = os.getenv("ADMIN_INIT_PASSWORD", "")
+    demo_seed_enabled: bool = _as_bool(os.getenv("DEMO_SEED_ENABLED", "false"), False)
 
     @property
     def db_dir(self) -> str:
