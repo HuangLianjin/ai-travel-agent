@@ -1072,10 +1072,6 @@ async def create_guide(
         trip = db.get_trip(req.trip_id, user["id"])
         if not trip:
             raise HTTPException(status_code=404, detail="行程不存在")
-        if db.query_one(
-            "SELECT id FROM guides WHERE trip_id = ?", (req.trip_id,)
-        ):
-            raise HTTPException(status_code=400, detail="该行程已发布过攻略，请选择其他行程")
         city = trip.get("city") or city
     guide_id = db.create_guide(
         user["id"],
@@ -1113,8 +1109,6 @@ async def create_guide_upload(
         trip = db.get_trip(trip_id, user["id"])
         if not trip:
             raise HTTPException(status_code=404, detail="行程不存在")
-        if db.query_one("SELECT id FROM guides WHERE trip_id = ?", (trip_id,)):
-            raise HTTPException(status_code=400, detail="该行程已发布过攻略，请选择其他行程")
         city = trip.get("city") or city
     guide_id = db.create_guide(
         user["id"], title, city, content, trip_id=trip_id
