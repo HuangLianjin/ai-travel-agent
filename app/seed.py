@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from app.config import get_settings
@@ -19,22 +20,23 @@ def main() -> None:
         print("未启用演示账号，跳过内置攻略初始化")
         db.close()
         return
-    for doc in build_docs():
-        title = doc.get("title") or doc.get("name", "攻略")
-        existing = db.query_one(
-            "SELECT id FROM guides WHERE title = ?", (title,)
-        )
-        if existing:
-            continue
-        db.create_guide(
-            user["id"],
-            title,
-            doc.get("city", ""),
-            doc.get("content", ""),
-            source=doc.get("source", "内置语料"),
-        )
-    for guide in db.list_guides("pending")[:4]:
-        db.update_guide_status(guide["id"], "approved")
+    if os.getenv("SEED_BUILTIN_GUIDES", "").lower() in ("1", "true", "yes"):
+        for doc in build_docs():
+            title = doc.get("title") or doc.get("name", "攻略")
+            existing = db.query_one(
+                "SELECT id FROM guides WHERE title = ?", (title,)
+            )
+            if existing:
+                continue
+            db.create_guide(
+                user["id"],
+                title,
+                doc.get("city", ""),
+                doc.get("content", ""),
+                source=doc.get("source", "内置语料"),
+            )
+        for guide in db.list_guides("pending")[:4]:
+            db.update_guide_status(guide["id"], "approved")
     print("初始化完成")
     db.close()
 
