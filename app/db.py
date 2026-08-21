@@ -834,6 +834,21 @@ class Database:
 
     # ==================== Agent 运行追踪 ====================
 
+    def start_agent_run(
+        self,
+        run_id: str,
+        user_id: int,
+        session_id: str,
+        user_input: str,
+    ) -> None:
+        self.execute(
+            "INSERT INTO agent_runs (run_id, user_id, session_id, intent, status, "
+            "user_input, created_at) VALUES (?, ?, ?, '', 'running', ?, ?) "
+            "ON CONFLICT(run_id) DO UPDATE SET status = 'running', "
+            "user_input = excluded.user_input, created_at = excluded.created_at",
+            (run_id, user_id, session_id, user_input[:4000], _now()),
+        )
+
     def save_agent_run(
         self,
         run_id: str,
@@ -855,7 +870,14 @@ class Database:
             "INSERT INTO agent_runs (run_id, user_id, session_id, intent, status, "
             "user_input, plan, response, agent_results, tool_calls, prompt_tokens, "
             "completion_tokens, latency_ms, error, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(run_id) DO UPDATE SET "
+            "intent = excluded.intent, status = excluded.status, "
+            "plan = excluded.plan, response = excluded.response, "
+            "agent_results = excluded.agent_results, tool_calls = excluded.tool_calls, "
+            "prompt_tokens = excluded.prompt_tokens, "
+            "completion_tokens = excluded.completion_tokens, "
+            "latency_ms = excluded.latency_ms, error = excluded.error",
             (
                 run_id,
                 user_id,

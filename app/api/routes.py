@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import shutil
@@ -564,7 +565,7 @@ async def chat(
     conv = db.get_conversation(session_id, user["id"])
     history = json.loads(conv["messages"]) if conv else []
     history.append({"role": "user", "content": req.message})
-    effective_trip_id = req.trip_id or db.get_last_trip_id(session_id, user["id"])
+    effective_trip_id = req.trip_id or ""
 
     if stream:
         from fastapi.responses import StreamingResponse
@@ -576,8 +577,10 @@ async def chat(
             "history": history,
         }
         config = {"recursion_limit": 50}
+        db.start_agent_run(run_id, user["id"], session_id, req.message)
+        events: asyncio.Queue = asyncio.Queue()
 
-        async def event_generator():
+        async def run_agent_task() -> None:
             final_state: dict[str, Any] = {}
             try:
                 async for mode, data in agent.astream(
@@ -585,8 +588,12 @@ async def chat(
                     config=config,
                     stream_mode=["custom", "values"],
                 ):
-                    if mode == "custom" and isinstance(data, dict) and data.get("type") in ("stage", "day"):
-                        yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    if (
+                        mode == "custom"
+                        and isinstance(data, dict)
+                        and data.get("type") in ("stage", "day")
+                    ):
+                        await events.put(data)
                     elif mode == "values":
                         final_state = data
 
@@ -633,33 +640,26 @@ async def chat(
                     max(0, metrics.completion_tokens - completion_before),
                     elapsed,
                 )
-
                 for i in range(0, len(response), 6):
-                    yield f"data: {json.dumps({'token': response[i:i+6]}, ensure_ascii=False)}\n\n"
-
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {
-                            "done": True,
-                            "run_id": run_id,
-                            "session_id": session_id,
-                            "trip_id": trip_id,
-                            "itinerary": plan,
-                            "version": final_state.get("version", 1),
-                            "validation_issues": plan.get("validation_issues", []),
-                            "agents": sorted(
-                                {
-                                    r.get("agent")
-                                    for r in (final_state.get("agent_results") or [])
-                                    if r.get("status") == "success"
-                                }
-                            ),
-                            "elapsed_ms": elapsed,
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n\n"
+                    await events.put({"token": response[i:i + 6]})
+                await events.put(
+                    {
+                        "done": True,
+                        "run_id": run_id,
+                        "session_id": session_id,
+                        "trip_id": trip_id,
+                        "itinerary": plan,
+                        "version": final_state.get("version", 1),
+                        "validation_issues": plan.get("validation_issues", []),
+                        "agents": sorted(
+                            {
+                                r.get("agent")
+                                for r in (final_state.get("agent_results") or [])
+                                if r.get("status") == "success"
+                            }
+                        ),
+                        "elapsed_ms": elapsed,
+                    }
                 )
             except Exception as exc:
                 elapsed = int((time.perf_counter() - t0) * 1000)
@@ -680,10 +680,22 @@ async def chat(
                     elapsed,
                     str(exc),
                 )
-                yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
+                await events.put({"error": str(exc)})
+            finally:
+                await events.put(None)
+
+        asyncio.create_task(run_agent_task())
+
+        async def event_generator():
+            while True:
+                item = await events.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+    db.start_agent_run(run_id, user["id"], session_id, req.message)
     try:
         state = await agent.ainvoke(
             {
@@ -774,6 +786,28 @@ async def chat(
         )
         audit(db, user["id"], "chat_failed", detail=str(exc))
         raise HTTPException(status_code=500, detail=f"规划失败：{exc}") from exc
+
+
+@router.get("/chat/status")
+async def chat_status(
+    session_id: str = "",
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("user", "admin", "super_admin")),
+):
+    if not session_id:
+        return {"status": "", "run_id": ""}
+    row = db.query_one(
+        "SELECT run_id, status, user_input FROM agent_runs "
+        "WHERE session_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1",
+        (session_id, user["id"]),
+    )
+    if not row:
+        return {"status": "", "run_id": ""}
+    return {
+        "run_id": row["run_id"],
+        "status": row["status"],
+        "user_input": (row["user_input"] or "")[:200],
+    }
 
 
 @router.get("/conversation")
@@ -1038,6 +1072,10 @@ async def create_guide(
         trip = db.get_trip(req.trip_id, user["id"])
         if not trip:
             raise HTTPException(status_code=404, detail="行程不存在")
+        if db.query_one(
+            "SELECT id FROM guides WHERE trip_id = ?", (req.trip_id,)
+        ):
+            raise HTTPException(status_code=400, detail="该行程已发布过攻略，请选择其他行程")
         city = trip.get("city") or city
     guide_id = db.create_guide(
         user["id"],
@@ -1075,6 +1113,8 @@ async def create_guide_upload(
         trip = db.get_trip(trip_id, user["id"])
         if not trip:
             raise HTTPException(status_code=404, detail="行程不存在")
+        if db.query_one("SELECT id FROM guides WHERE trip_id = ?", (trip_id,)):
+            raise HTTPException(status_code=400, detail="该行程已发布过攻略，请选择其他行程")
         city = trip.get("city") or city
     guide_id = db.create_guide(
         user["id"], title, city, content, trip_id=trip_id
@@ -1295,7 +1335,16 @@ async def admin_reviews(
     db: Database = Depends(get_db),
     user: dict = Depends(require_role("admin", "super_admin")),
 ):
-    return db.list_reviews(status, target_type="guide")
+    reviews = db.list_reviews(status, target_type="guide")
+    seen: set[str] = set()
+    unique = []
+    for item in reviews:
+        target_id = str(item.get("target_id") or "")
+        if target_id in seen:
+            continue
+        seen.add(target_id)
+        unique.append(item)
+    return unique
 
 
 @router.get("/admin/prices")

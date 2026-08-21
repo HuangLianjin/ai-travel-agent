@@ -99,6 +99,7 @@ createApp({
       chatInput: "",
       chatLog: [],
       sending: false,
+      taskRunning: false,
       streamStatus: "",
       tripId: "",
       trip: null,
@@ -213,6 +214,36 @@ createApp({
     toastMsg(msg) {
       this.toast = msg;
       setTimeout(() => (this.toast = ""), 2600);
+    },
+    async restorePendingTask() {
+      if (!this.sessionId || this.isAdmin) return;
+      try {
+        const st = await request(`/chat/status?session_id=${encodeURIComponent(this.sessionId)}`);
+        if (st.status !== "running") return;
+        this.taskRunning = true;
+        this.streamStatus = "行程正在后台生成中，刷新页面不影响生成...";
+        const timer = setInterval(async () => {
+          try {
+            const s2 = await request(`/chat/status?session_id=${encodeURIComponent(this.sessionId)}`);
+            if (s2.status !== "running") {
+              clearInterval(timer);
+              this.taskRunning = false;
+              this.streamStatus = "";
+              if (s2.status === "success") {
+                this.chatLog.push({ role: "ai", content: "行程已在后台生成完成，已为你打开最新行程。" });
+                await this.loadTrips();
+                if (this.trips.length) await this.openTrip(this.trips[0]);
+              } else {
+                this.chatLog.push({ role: "ai", content: "后台生成失败，请重新发起。" });
+              }
+            }
+          } catch (e) {
+            clearInterval(timer);
+            this.taskRunning = false;
+            this.streamStatus = "";
+          }
+        }, 3000);
+      } catch (e) {}
     },
     async loadMyProfile() {
       try {
@@ -943,7 +974,7 @@ createApp({
     },
     async sendMessage() {
       const text = this.chatInput.trim();
-      if (!text || this.sending) return;
+      if (!text || this.sending || this.taskRunning) return;
       this.chatLog.push({ role: "user", content: text });
       this.chatLog.push({ role: "assistant", content: "" });
       this.chatInput = "";
@@ -993,6 +1024,7 @@ createApp({
               last.content += ev.token;
               this.chatLog.splice(this.chatLog.length - 1, 1, { ...last });
             } else if (ev.done) {
+              this.taskRunning = false;
               this.trip = ev.itinerary;
               this.tripId = ev.trip_id || this.tripId;
               this.tripSource = "create";
@@ -1289,6 +1321,7 @@ createApp({
         this.loadAdmin();
       } else {
         this.loadAll();
+        this.restorePendingTask();
       }
       this.loadMyProfile();
     }
