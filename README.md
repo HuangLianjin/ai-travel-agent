@@ -70,6 +70,7 @@ python -m app.eval.runner --output data/eval_report.json
 - 生产化升级计划：[docs/PRODUCTION_UPGRADE_PLAN.md](docs/PRODUCTION_UPGRADE_PLAN.md)
 - 简历素材：[docs/RESUME_GUIDE.md](docs/RESUME_GUIDE.md)
 - 面试问答：[docs/INTERVIEW_Q_A.md](docs/INTERVIEW_Q_A.md)
+- 产品思考与面试叙事：[docs/INTERVIEW_NARRATIVE.md](docs/INTERVIEW_NARRATIVE.md)
 - GitHub 上传与在线演示：[docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)
 
 ## 注意

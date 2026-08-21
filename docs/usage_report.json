@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-08-21T11:35:44+00:00",
+  "total_runs": 38,
+  "success_runs": 36,
+  "failed_runs": 2,
+  "success_rate": 0.9474,
+  "avg_latency_ms": 30533.29,
+  "p95_latency_ms": 52612,
+  "prompt_tokens": 66710,
+  "completion_tokens": 101994,
+  "total_tokens": 168704,
+  "estimated_cost_yuan": 0.9494,
+  "input_price_per_1m": 2.0,
+  "output_price_per_1m": 8.0,
+  "by_intent": {
+    "chat": 3,
+    "create": 30,
+    "adjust": 5
+  },
+  "by_status": {
+    "success": 36,
+    "failed": 2
+  }
+}
