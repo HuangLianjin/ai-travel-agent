@@ -33,6 +33,7 @@ from app.schemas import (
 )
 from app.security import create_token, verify_password
 from app.services.planner import _recompute_costs, build_itinerary
+from app.services.price_enrich import enrich_plan_with_prices
 
 router = APIRouter()
 
@@ -201,9 +202,16 @@ async def chat(
                         final_state = data
 
                 plan = final_state.get("itinerary", {})
+                plan = enrich_plan_with_prices(plan, db)
                 response = final_state.get("response", "") or ""
                 trip_id = final_state.get("trip_id", effective_trip_id)
                 if trip_id:
+                    db.update_trip(
+                        trip_id,
+                        final_state.get("version", 1),
+                        final_state.get("params", {}),
+                        plan,
+                    )
                     db.set_last_trip_id(session_id, user["id"], trip_id)
                 history.append({"role": "assistant", "content": response})
                 db.upsert_conversation(session_id, user["id"], history)
@@ -285,9 +293,16 @@ async def chat(
             }
         )
         plan = state.get("itinerary", {})
+        plan = enrich_plan_with_prices(plan, db)
         response = state.get("response", "")
         trip_id = state.get("trip_id", effective_trip_id)
         if trip_id:
+            db.update_trip(
+                trip_id,
+                state.get("version", 1),
+                state.get("params", {}),
+                plan,
+            )
             db.set_last_trip_id(session_id, user["id"], trip_id)
         history.append({"role": "assistant", "content": response})
         db.upsert_conversation(session_id, user["id"], history)
@@ -801,6 +816,85 @@ async def admin_reviews(
     user: dict = Depends(require_role("admin", "super_admin")),
 ):
     return db.list_reviews(status, target_type="guide")
+
+
+@router.get("/admin/prices")
+async def admin_prices(
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    return db.list_place_prices()
+
+
+@router.post("/admin/prices")
+async def admin_upsert_price(
+    body: dict[str, Any],
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    price_id = db.upsert_place_price(
+        str(body.get("place_name", "")).strip(),
+        str(body.get("city", "")).strip(),
+        float(body.get("price") or 0),
+        source=str(body.get("source") or "人工维护"),
+        source_url=str(body.get("source_url") or ""),
+        note=str(body.get("note") or ""),
+        status=str(body.get("status") or "approved"),
+    )
+    audit(db, user["id"], "upsert_price", "place_price", price_id)
+    return {"id": price_id}
+
+
+@router.delete("/admin/prices/{price_id}")
+async def admin_delete_price(
+    price_id: str,
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    db.delete_place_price(price_id)
+    audit(db, user["id"], "delete_price", "place_price", price_id)
+    return {"status": "ok"}
+
+
+@router.post("/prices/feedback")
+async def submit_price_feedback(
+    body: dict[str, Any],
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("user")),
+):
+    place_name = str(body.get("place_name", "")).strip()
+    if not place_name or float(body.get("price") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="地点和价格不能为空")
+    feedback_id = db.submit_price_feedback(
+        place_name,
+        str(body.get("city", "")).strip(),
+        float(body.get("price") or 0),
+        user["id"],
+    )
+    return {"id": feedback_id, "status": "pending"}
+
+
+@router.get("/admin/price-feedback")
+async def admin_price_feedback(
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    return db.list_price_feedback()
+
+
+@router.post("/admin/price-feedback/{feedback_id}/decide")
+async def decide_price_feedback(
+    feedback_id: str,
+    body: dict[str, Any],
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    status = str(body.get("status") or "approved")
+    if status not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="无效状态")
+    db.decide_price_feedback(feedback_id, status, user["id"])
+    audit(db, user["id"], "decide_price_feedback", "price_feedback", feedback_id, status)
+    return {"status": "ok"}
 
 
 @router.post("/admin/reviews/{review_id}/decide")

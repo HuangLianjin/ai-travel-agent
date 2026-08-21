@@ -167,6 +167,29 @@ class Database:
                     error TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS place_prices (
+                    id TEXT PRIMARY KEY,
+                    place_name TEXT NOT NULL,
+                    city TEXT NOT NULL DEFAULT '',
+                    price REAL NOT NULL DEFAULT 0,
+                    source TEXT NOT NULL DEFAULT 'reference',
+                    source_url TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'approved',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS price_feedback (
+                    id TEXT PRIMARY KEY,
+                    place_name TEXT NOT NULL,
+                    city TEXT NOT NULL DEFAULT '',
+                    price REAL NOT NULL DEFAULT 0,
+                    user_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    reviewer_id INTEGER,
+                    decided_at TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             self._conn.commit()
@@ -996,6 +1019,122 @@ class Database:
             note=note,
             reviewer_id=reviewer_id,
         )
+
+    def list_place_prices(self, status: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM place_prices"
+        if status:
+            sql += " WHERE status = ?"
+        sql += " ORDER BY updated_at DESC"
+        rows = self.query_all(sql, (status,) if status else ())
+        for row in rows:
+            row["price"] = float(row.get("price") or 0)
+        return rows
+
+    def upsert_place_price(
+        self,
+        place_name: str,
+        city: str,
+        price: float,
+        source: str = "reference",
+        source_url: str = "",
+        note: str = "",
+        status: str = "approved",
+    ) -> str:
+        now = _now()
+        existing = self.query_one(
+            "SELECT id FROM place_prices WHERE place_name = ? AND city = ? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (place_name, city),
+        )
+        if existing:
+            self.execute(
+                "UPDATE place_prices SET price = ?, source = ?, source_url = ?, "
+                "note = ?, status = ?, updated_at = ? WHERE id = ?",
+                (float(price), source, source_url, note, status, now, existing["id"]),
+            )
+            return existing["id"]
+        price_id = uuid.uuid4().hex[:12]
+        self.execute(
+            "INSERT INTO place_prices (id, place_name, city, price, source, "
+            "source_url, note, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                price_id,
+                place_name,
+                city,
+                float(price),
+                source,
+                source_url,
+                note,
+                status,
+                now,
+                now,
+            ),
+        )
+        return price_id
+
+    def delete_place_price(self, price_id: str) -> bool:
+        return self.execute(
+            "DELETE FROM place_prices WHERE id = ?", (price_id,)
+        ) > 0
+
+    def submit_price_feedback(
+        self,
+        place_name: str,
+        city: str,
+        price: float,
+        user_id: int,
+    ) -> str:
+        feedback_id = uuid.uuid4().hex[:12]
+        self.execute(
+            "INSERT INTO price_feedback (id, place_name, city, price, user_id, "
+            "status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (
+                feedback_id,
+                place_name,
+                city,
+                float(price),
+                user_id,
+                _now(),
+            ),
+        )
+        return feedback_id
+
+    def list_price_feedback(self, status: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM price_feedback"
+        if status:
+            sql += " WHERE status = ?"
+        sql += " ORDER BY created_at DESC"
+        rows = self.query_all(sql, (status,) if status else ())
+        for row in rows:
+            row["price"] = float(row.get("price") or 0)
+        return rows
+
+    def decide_price_feedback(
+        self,
+        feedback_id: str,
+        status: str,
+        reviewer_id: int,
+    ) -> bool:
+        row = self.query_one(
+            "SELECT * FROM price_feedback WHERE id = ?", (feedback_id,)
+        )
+        if not row or row.get("status") != "pending":
+            return False
+        if status == "approved":
+            self.upsert_place_price(
+                row["place_name"],
+                row["city"],
+                float(row["price"] or 0),
+                source="用户反馈",
+                note=f"用户反馈价格 {row['price']} 元，已审核",
+            )
+        self.execute(
+            "UPDATE price_feedback SET status = ?, reviewer_id = ?, decided_at = ? "
+            "WHERE id = ?",
+            (status, reviewer_id, _now(), feedback_id),
+        )
+        return True
 
     def list_reviews(
         self,

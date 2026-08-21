@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from app.corpus import CITIES, build_docs
+from app.data_registry import level_label, official_site
 from app.rag.search import HybridSearcher
 def _to_int(value: Any, default: int = 0) -> int:
     if value is None or value == "":
@@ -223,10 +224,21 @@ def _decorate_plan(plan: dict[str, Any]) -> dict[str, Any]:
                         or _default_food_price(item.get("name", ""))
                     )
                     item["price_source"] = "估算价"
+            source = str(item.get("price_source") or "")
+            item["data_level"] = "C" if "估算" in source else "B"
+            item["data_label"] = level_label(item["data_level"])
         for item in day.get("attractions", []):
             item["description"] = _short_intro(
                 item.get("name", ""), item.get("note", ""), city, "景点"
             )
+            site_url = official_site(str(item.get("name", "")))
+            if site_url:
+                item["official_url"] = site_url
+                item["booking_required"] = True
+                item["data_level"] = "A"
+            else:
+                item["data_level"] = "B"
+            item["data_label"] = level_label(item["data_level"])
             if not item.get("fee"):
                 content = str(item.get("content") or item.get("note") or "")
                 m = re.search(r"(?:门票|票价)[:：]?\s*¥\s*(\d{1,4})", content) or re.search(
@@ -1179,6 +1191,8 @@ def _make_transport_leg(
             "from_lon": current.get("lon", ""),
             "to_lat": nxt.get("lat", ""),
             "to_lon": nxt.get("lon", ""),
+            "data_level": "S" if cost_source == "高德" else "C",
+            "data_label": level_label("S" if cost_source == "高德" else "C"),
         },
         minutes,
     )

@@ -87,6 +87,9 @@ createApp({
       reviews: [],
       users: [],
       auditLogs: [],
+      priceReferences: [],
+      priceFeedback: [],
+      priceDraft: { place_name: "", city: "", price: "", source: "人工维护", source_url: "", note: "" },
       metrics: null,
       agentRuns: [],
       evalReport: null,
@@ -350,15 +353,44 @@ createApp({
       await this.loadLikedGuides();
     },
     async loadAdmin() {
-      const [reviews, users, logs, slots] = await Promise.all([
+      const [reviews, users, logs, slots, prices, feedback] = await Promise.all([
         request("/admin/reviews"),
         request("/admin/users"),
         request("/admin/audit-logs"),
         request("/admin/recommend-slots"),
+        request("/admin/prices"),
+        request("/admin/price-feedback"),
       ]);
       this.reviews = reviews;
       this.users = users;
       this.auditLogs = logs;
+      this.priceReferences = prices || [];
+      this.priceFeedback = feedback || [];
+    },
+    async savePrice() {
+      if (!this.priceDraft.place_name.trim() || !this.priceDraft.price) {
+        alert("地点和价格不能为空");
+        return;
+      }
+      await request("/admin/prices", {
+        method: "POST",
+        body: JSON.stringify({ ...this.priceDraft, price: Number(this.priceDraft.price) }),
+      });
+      this.priceDraft = { place_name: "", city: "", price: "", source: "人工维护", source_url: "", note: "" };
+      await this.loadAdmin();
+      this.toastMsg("价格已保存");
+    },
+    async deletePrice(id) {
+      await request(`/admin/prices/${id}`, { method: "DELETE" });
+      await this.loadAdmin();
+    },
+    async decidePriceFeedback(fb, status) {
+      await request(`/admin/price-feedback/${fb.id}/decide`, {
+        method: "POST",
+        body: JSON.stringify({ status }),
+      });
+      await this.loadAdmin();
+      this.toastMsg(status === "approved" ? "反馈已采用" : "反馈已驳回");
     },
     async loadMetrics() {
       const [m, runs] = await Promise.all([
@@ -733,6 +765,23 @@ createApp({
       const data = await request(`/guides/${this.viewGuide.id}`);
       this.viewGuide = data;
     },
+    async feedbackPrice(item) {
+      const name = item.title || item.name || "";
+      if (!name) return;
+      const city = (this.trip && this.trip.city) || "";
+      const input = prompt(`反馈 ${name} 的实际价格（元）：`);
+      if (!input) return;
+      const price = Number(input);
+      if (!price || price <= 0) {
+        alert("请输入有效价格");
+        return;
+      }
+      await request("/prices/feedback", {
+        method: "POST",
+        body: JSON.stringify({ place_name: name, city, price }),
+      });
+      this.toastMsg("价格反馈已提交，等待管理员审核");
+    },
     async addGuideComment() {
       if (!this.viewGuide || !this.guideComment.trim()) return;
       await request(`/guides/${this.viewGuide.id}/comments`, {
@@ -933,6 +982,7 @@ createApp({
                     <span class="tl-type">{{ t.type === 'attraction' ? '景点' : t.type === 'food' ? '美食' : t.type === 'photo' ? '拍照' : t.type === 'hotel_return' ? '回酒店' : t.type === 'rest' ? '休息' : '交通' }}</span>
                     <div class="tl-body">
                       <b>{{ t.restaurant ? t.restaurant + '（' + t.title + '）' : t.title }}</b>
+                      <span v-if="t.data_label" class="data-badge" :class="'lv-' + (t.data_level || 'C')">{{ t.data_label }}</span>
                       <span v-if="t.mode && t.type === 'transport'" class="muted"> · {{ transportModeName(t.mode) }} · {{ t.minutes }}分钟<template v-if="t.cost_yuan != null"> · ¥{{ transportCost(t) }}</template><template v-if="t.cost_yuan == null"> · 费用待定</template></span>
                       <div v-if="t.steps && t.steps.length" class="muted">换乘：{{ t.steps.join('；') }}</div>
                       <span v-if="t.price && t.type !== 'transport'" class="muted"> · 约 ¥{{ t.price * (trip.params && trip.params.travelers || 1) }}<template v-if="(trip.params && trip.params.travelers || 1) > 1">（{{ trip.params.travelers }}人）</template></span>
@@ -940,17 +990,19 @@ createApp({
                       <div v-if="t.note" class="muted">{{ t.note }}</div>
                       <a v-if="t.url" :href="t.url" target="_blank" rel="noopener" class="link-btn"><i data-lucide="ticket"></i> 官方预约</a>
                       <a v-if="t.map_url" :href="t.map_url" target="_blank" rel="noopener" class="link-btn"><i data-lucide="search"></i> 找店</a>
+                      <button v-if="t.type === 'attraction' || t.type === 'food'" class="link-btn" @click="feedbackPrice(t)"><i data-lucide="pencil"></i> 反馈价格</button>
                     </div>
                   </div>
                 </div>
                 <div v-else>
                   <div v-for="item in currentDay.attractions" :key="item.name" class="small" style="padding:4px 0">
                     <b>{{ item.name }}</b>
+                    <span v-if="item.data_label" class="data-badge" :class="'lv-' + (item.data_level || 'B')">{{ item.data_label }}</span>
                     <span class="muted"> · {{ item.opening_hours }} · {{ item.fee || 0 }} 元 · {{ item.duration_hours }}h</span>
                     <div class="muted">{{ item.note }}</div>
                     <a v-if="item.official_url" :href="item.official_url" target="_blank" rel="noopener" class="link-btn"><i data-lucide="ticket"></i> 官方预约</a>
                   </div>
-                  <div class="small muted" style="margin-top:6px">餐饮：<span v-for="f in currentDay.dining" :key="f.name">{{ f.restaurant ? f.restaurant + '（' + f.name + '）' : f.name }}（{{ f.price || f.budget }}元{{ f.price_source === '估算价' || !f.price_source ? '·估算价' : '·' + f.price_source }}）<a v-if="f.map_url" :href="f.map_url" target="_blank" rel="noopener" class="link-btn" style="margin:0 0 0 6px"><i data-lucide="search"></i> 找店</a> </span></div>
+                  <div class="small muted" style="margin-top:6px">餐饮：<span v-for="f in currentDay.dining" :key="f.name">{{ f.restaurant ? f.restaurant + '（' + f.name + '）' : f.name }}<span v-if="f.data_label" class="data-badge" :class="'lv-' + (f.data_level || 'B')">{{ f.data_label }}</span>（{{ f.price || f.budget }}元{{ f.price_source === '估算价' || !f.price_source ? '·估算价' : '·' + f.price_source }}）<a v-if="f.map_url" :href="f.map_url" target="_blank" rel="noopener" class="link-btn" style="margin:0 0 0 6px"><i data-lucide="search"></i> 找店</a> </span></div>
                   <div class="route-leg" v-for="leg in currentDay.route" :key="leg.from">
                     <i data-lucide="navigation" style="width:14px"></i>
                     <span>{{ leg.from }} → {{ leg.to }} · {{ leg.distance_km }}km · {{ leg.minutes }}分钟</span>
@@ -1296,6 +1348,7 @@ createApp({
                 <button class="btn sm" :class="{primary:adminTab==='reviews'}" @click="adminTab='reviews'">人工复核</button>
                 <button class="btn sm" :class="{primary:adminTab==='users'}" @click="adminTab='users'">用户治理</button>
                 <button class="btn sm" :class="{primary:adminTab==='audit'}" @click="adminTab='audit'">审计日志</button>
+                <button class="btn sm" :class="{primary:adminTab==='prices'}" @click="adminTab='prices'">真实数据</button>
               </div>
               <div v-if="adminTab==='reviews'">
                 <table class="table">
@@ -1329,6 +1382,36 @@ createApp({
                   <tr><th>时间</th><th>动作</th><th>对象</th><th>详情</th></tr>
                   <tr v-for="a in auditLogs" :key="a.id">
                     <td>{{ a.created_at }}</td><td>{{ a.action }}</td><td>{{ a.target_type }} {{ a.target_id }}</td><td>{{ a.detail }}</td>
+                  </tr>
+                </table>
+              </div>
+              <div v-if="adminTab==='prices'">
+                <h4 style="margin:0 0 8px">价格库</h4>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:10px">
+                  <input v-model="priceDraft.place_name" placeholder="地点/店名" />
+                  <input v-model="priceDraft.city" placeholder="城市" />
+                  <input v-model="priceDraft.price" type="number" placeholder="价格" />
+                  <input v-model="priceDraft.source" placeholder="来源" />
+                  <input v-model="priceDraft.source_url" placeholder="来源链接" />
+                  <input v-model="priceDraft.note" placeholder="备注" />
+                </div>
+                <button class="btn primary sm" @click="savePrice"><i data-lucide="save"></i> 保存价格</button>
+                <table class="table" style="margin-top:10px">
+                  <tr><th>地点</th><th>城市</th><th>价格</th><th>来源</th><th>更新时间</th><th>操作</th></tr>
+                  <tr v-for="p in priceReferences" :key="p.id">
+                    <td>{{ p.place_name }}</td><td>{{ p.city }}</td><td>¥{{ p.price }}</td><td>{{ p.source }}</td><td>{{ formatDateTime(p.updated_at) }}</td>
+                    <td><button class="btn sm danger" @click="deletePrice(p.id)">删除</button></td>
+                  </tr>
+                </table>
+                <h4 style="margin:16px 0 8px">用户价格反馈</h4>
+                <table class="table">
+                  <tr><th>地点</th><th>城市</th><th>反馈价</th><th>状态</th><th>操作</th></tr>
+                  <tr v-for="f in priceFeedback" :key="f.id">
+                    <td>{{ f.place_name }}</td><td>{{ f.city }}</td><td>¥{{ f.price }}</td><td>{{ statusText(f.status) }}</td>
+                    <td>
+                      <button v-if="f.status==='pending'" class="btn sm" @click="decidePriceFeedback(f,'approved')">采用</button>
+                      <button v-if="f.status==='pending'" class="btn sm danger" @click="decidePriceFeedback(f,'rejected')">驳回</button>
+                    </td>
                   </tr>
                 </table>
               </div>
