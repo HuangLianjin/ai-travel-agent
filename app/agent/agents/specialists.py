@@ -800,6 +800,50 @@ class SynthesisAgent(BaseTravelAgent):
         except Exception:
             return plan
 
+    @staticmethod
+    def _extract_hotel_name(raw: str) -> str | None:
+        """从搜索结果中提取具体酒店名，拒绝文章/榜单类标题。"""
+        raw = (raw or "").strip()
+        if not raw:
+            return None
+        markers = ("酒店", "宾馆", "饭店", "民宿", "公寓", "客栈", "旅馆", "度假村", "山庄")
+        dirty = (
+            "怎么选", "谁更", "拆解", "维度", "FAQ", "攻略", "大全", "榜单",
+            "精选", "盘点", "预订", "优惠", "价格", "一晚", "推荐", "附近",
+            "住宿", "新闻", "百家号", "搜狐", "新浪", "网易", "知乎",
+        )
+        article_hints = (
+            "怎么选", "谁更", "拆解", "维度", "FAQ", "攻略", "榜单",
+            "精选", "盘点", "预订", "一晚", "推荐",
+        )
+        candidates: list[tuple[str, bool]] = []
+        for segment in re.split(r"[|_—\-]+", raw):
+            segment = segment.strip()
+            if not segment:
+                continue
+            m = re.search(
+                r"([\u4e00-\u9fa5A-Za-z0-9·]{2,40}(?:酒店|宾馆|饭店|民宿|公寓|客栈|旅馆|度假村|山庄)(?:\([^)]{0,30}\))?)",
+                segment,
+            )
+            if m:
+                candidate = m.group(1)
+                trusted = segment == candidate or segment.strip() == candidate
+                if not trusted and any(h in segment for h in article_hints):
+                    trusted = False
+                candidates.append((candidate, trusted))
+            elif len(segment) <= 30 and any(k in segment for k in markers):
+                candidates.append((segment, True))
+        for candidate, trusted in reversed(candidates):
+            candidate = candidate.strip(" ··|-—")
+            if not (2 <= len(candidate) <= 40):
+                continue
+            if not trusted:
+                continue
+            if any(k in candidate for k in dirty):
+                continue
+            return candidate
+        return None
+
     async def _search_hotel_options(
         self, plan: dict[str, Any]
     ) -> list[dict[str, Any]]:
@@ -814,7 +858,9 @@ class SynthesisAgent(BaseTravelAgent):
             results = []
         hotels = []
         for item in results:
-            name = item.get("name") or item.get("title") or ""
+            name = self._extract_hotel_name(
+                item.get("name") or item.get("title") or ""
+            )
             if not name:
                 continue
             if any(
