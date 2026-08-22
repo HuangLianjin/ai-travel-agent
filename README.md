@@ -17,6 +17,7 @@
 - 反思重试 + 预算强约束 + 来源约束
 - 流式输出、版本管理、人工审核、攻略广场、收藏、关注
 - 运行 trace：每次生成保存 token、耗时、状态、错误
+- 健康监控：每 5 分钟探活，失败时 PushPlus/企业微信推送告警
 - Docker + GitHub Actions CI + 离线评测
 
 ## 技术栈
@@ -99,6 +100,7 @@ python -m app.eval.runner --output data/eval_report.json
 - Render 在线部署：[docs/RENDER_DEPLOY.md](docs/RENDER_DEPLOY.md)
 - Koyeb 免绑卡部署：[docs/KOYEB_DEPLOY.md](docs/KOYEB_DEPLOY.md)
 - 国内轻量服务器部署：[docs/CHINA_CLOUD_DEPLOY.md](docs/CHINA_CLOUD_DEPLOY.md)
+- 监控告警配置：[docs/MONITORING.md](docs/MONITORING.md)
 
 ## 注意
 
