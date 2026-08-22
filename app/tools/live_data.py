@@ -64,6 +64,7 @@ class LiveDataService:
                 await self._enrich_ticket(item, city, departure_date)
             for item in day.get("dining", []):
                 await self._enrich_restaurant(item, city)
+            self._sync_timeline(day)
         plan["hotel_options"] = await self._hotels(
             city, departure_date, nights, travelers
         )
@@ -88,6 +89,34 @@ class LiveDataService:
                 }
         return plan
 
+
+    @staticmethod
+    def _sync_timeline(day: dict[str, Any]) -> None:
+        """把景点/餐饮的实时价格同步到时间线条目，保证页面展示一致。"""
+        by_name: dict[str, list[dict[str, Any]]] = {}
+        for attr in day.get("attractions", []) or []:
+            by_name.setdefault(str(attr.get("name") or ""), []).append(attr)
+        for food in day.get("dining", []) or []:
+            by_name.setdefault(str(food.get("name") or ""), []).append(food)
+        for item in day.get("timeline", []) or []:
+            key = str(item.get("title") or item.get("restaurant") or "")
+            matches = by_name.get(key) or []
+            if not matches:
+                continue
+            src = matches[0]
+            if item.get("type") == "attraction":
+                item["price"] = src.get("fee") or src.get("price") or 0
+            elif item.get("type") == "food":
+                item["price"] = src.get("price") or src.get("fee") or 0
+            for field in (
+                "price_source",
+                "data_level",
+                "data_label",
+                "address",
+                "official_url",
+            ):
+                if src.get(field):
+                    item[field] = src[field]
     async def _enrich_ticket(
         self, item: dict[str, Any], city: str, departure_date: str
     ) -> None:

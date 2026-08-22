@@ -613,7 +613,7 @@ def _recompute_costs(plan: dict[str, Any]) -> dict[str, Any]:
         or 0
     )
     for day_index, day in enumerate(plan.get("days", [])):
-        attractions = sum(_to_int(a.get("fee") or a.get("budget") or 0) for a in day.get("attractions", []))
+        attractions = sum(_to_int(a.get("fee") or a.get("budget") or 0) for a in day.get("attractions", [])) * travelers
         dining = sum(_to_int(f.get("price") or f.get("budget") or f.get("fee") or _FOOD_PRICE_MAP.get(f.get("name", ""), 0)) for f in day.get("dining", [])) * travelers
         timeline = day.get("timeline") or []
         legs = timeline if timeline else (day.get("route", []) or [])

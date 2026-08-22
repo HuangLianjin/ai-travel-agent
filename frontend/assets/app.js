@@ -843,6 +843,15 @@ createApp({
       }
       return unit;
     },
+    hotelPrice(h) {
+      const n = Number(h && h.price);
+      return Number.isFinite(n) ? Math.round(n) : null;
+    },
+    timelinePrice(t) {
+      const n = Number((this.trip && this.trip.params && this.trip.params.travelers) || 1);
+      const unit = t && t.type === "attraction" ? Number(t.fee || t.price || 0) : Number(t && t.price || 0);
+      return unit ? Math.round(unit * n) : 0;
+    },
     escapeHtml(s) {
       return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     },
@@ -886,8 +895,9 @@ createApp({
             line += ` · ${this.transportModeName(item.mode)} · ${item.minutes}分钟`;
             if (item.cost_yuan != null) line += ` · ¥${this.transportCost(item)}`;
           }
-          if (item.type !== "transport" && item.price) {
-            line += ` · 约¥${item.price * (p.travelers || 1)}${(p.travelers || 1) > 1 ? `（${p.travelers}人）` : ""}`;
+          const itemPrice = this.timelinePrice(item);
+          if (item.type !== "transport" && itemPrice) {
+            line += ` · 约¥${itemPrice}${(p.travelers || 1) > 1 ? `（${p.travelers}人）` : ""}`;
           }
           if (item.address) line += ` · 地址：${item.address}`;
           if (item.note) line += ` · ${item.note}`;
@@ -1500,7 +1510,7 @@ createApp({
                       <span v-if="t.data_label" class="data-badge" :class="'lv-' + (t.data_level || 'C')">{{ t.data_label }}</span>
                       <span v-if="t.mode && t.type === 'transport'" class="muted"> · {{ transportModeName(t.mode) }} · {{ t.minutes }}分钟<template v-if="t.cost_yuan != null"> · ¥{{ transportCost(t) }}</template><template v-if="t.cost_yuan == null"> · 费用待定</template></span>
                       <div v-if="t.steps && t.steps.length" class="muted">换乘：{{ t.steps.join('；') }}</div>
-                      <span v-if="t.price && t.type !== 'transport'" class="muted"> · 约 ¥{{ t.price * (trip.params && trip.params.travelers || 1) }}<template v-if="(trip.params && trip.params.travelers || 1) > 1">（{{ trip.params.travelers }}人）</template></span>
+                      <span v-if="timelinePrice(t) && t.type !== 'transport'" class="muted"> · 约 ¥{{ timelinePrice(t) }}<template v-if="(trip.params && trip.params.travelers || 1) > 1">（{{ trip.params.travelers }}人）</template></span>
                       <div v-if="t.address" class="muted">地址：{{ t.address }}</div>
                       <div v-if="t.note" class="muted">{{ t.note }}</div>
                       <a v-if="t.url" :href="t.url" target="_blank" rel="noopener" class="link-btn"><i data-lucide="ticket"></i> 官方预约</a>
@@ -1513,7 +1523,7 @@ createApp({
                   <div v-for="item in currentDay.attractions" :key="item.name" class="small" style="padding:4px 0">
                     <b>{{ item.name }}</b>
                     <span v-if="item.data_label" class="data-badge" :class="'lv-' + (item.data_level || 'B')">{{ item.data_label }}</span>
-                    <span class="muted"> · {{ item.opening_hours }} · {{ item.fee != null ? item.fee : '待查' }} 元 · {{ item.duration_hours }}h</span>
+                    <span class="muted"> · {{ item.opening_hours }} · {{ item.fee != null ? item.fee * ((trip.params && trip.params.travelers) || 1) : '待查' }} 元 · {{ item.duration_hours }}h</span>
                     <div class="muted">{{ item.note }}</div>
                     <a v-if="item.official_url" :href="item.official_url" target="_blank" rel="noopener" class="link-btn"><i data-lucide="ticket"></i> 官方预约</a>
                   </div>
