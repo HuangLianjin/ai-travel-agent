@@ -64,6 +64,7 @@ from app.security import (
 )
 from app.services.planner import _recompute_costs, build_itinerary
 from app.services.price_enrich import enrich_plan_with_prices
+from app.tools.live_data import LiveDataService
 
 router = APIRouter()
 
@@ -598,6 +599,10 @@ async def chat(
                         final_state = data
 
                 plan = final_state.get("itinerary", {})
+                _live_params = final_state.get("params") or plan.get("params") or {}
+                plan = await LiveDataService().enrich_plan(
+                    plan, _live_params.get("departure_date", "")
+                )
                 plan = enrich_plan_with_prices(plan, db)
                 plan = _recompute_costs(plan)
                 _params = final_state.get("params") or plan.get("params") or {}
@@ -706,6 +711,10 @@ async def chat(
             }
         )
         plan = state.get("itinerary", {})
+        _live_params = state.get("params") or plan.get("params") or {}
+        plan = await LiveDataService().enrich_plan(
+            plan, _live_params.get("departure_date", "")
+        )
         plan = enrich_plan_with_prices(plan, db)
         plan = _recompute_costs(plan)
         _params = state.get("params") or plan.get("params") or {}

@@ -607,7 +607,12 @@ def _recompute_costs(plan: dict[str, Any]) -> dict[str, Any]:
     """按天重算消费，并汇总总消费。"""
     daily_totals = []
     travelers = max(1, int((plan.get("params") or {}).get("travelers", 1) or 1))
-    for day in plan.get("days", []):
+    hotel_total = _to_int(
+        (plan.get("hotel") or {}).get("total_price")
+        or (plan.get("hotel") or {}).get("price")
+        or 0
+    )
+    for day_index, day in enumerate(plan.get("days", [])):
         attractions = sum(_to_int(a.get("fee") or a.get("budget") or 0) for a in day.get("attractions", []))
         dining = sum(_to_int(f.get("price") or f.get("budget") or f.get("fee") or _FOOD_PRICE_MAP.get(f.get("name", ""), 0)) for f in day.get("dining", [])) * travelers
         timeline = day.get("timeline") or []
@@ -615,13 +620,15 @@ def _recompute_costs(plan: dict[str, Any]) -> dict[str, Any]:
         transport = _transport_cost(legs, travelers)
         if not legs:
             transport = 60 * travelers
+        hotel = hotel_total if day_index == 0 else 0
         daily_totals.append(
             {
                 "day": day.get("day"),
                 "attractions": attractions,
                 "dining": dining,
                 "transport": transport,
-                "total": attractions + dining + transport,
+                "hotel": hotel,
+                "total": attractions + dining + transport + hotel,
             }
         )
     total_attractions = sum(item["attractions"] for item in daily_totals)
@@ -634,7 +641,8 @@ def _recompute_costs(plan: dict[str, Any]) -> dict[str, Any]:
         "attractions": total_attractions,
         "dining": total_dining,
         "transport": total_transport,
-        "estimated_total": total_attractions + total_dining + total_transport,
+        "hotel": hotel_total,
+        "estimated_total": total_attractions + total_dining + total_transport + hotel_total,
     }
     for key in ("spend_mode", "max_consumption"):
         if key in old_budget:
@@ -666,7 +674,7 @@ def _enforce_budget(plan: dict[str, Any]) -> dict[str, Any]:
     def total_cost() -> int:
         return int(costs.get("attractions", 0)) + int(
             costs.get("dining", 0)
-        ) + int(costs.get("transport", 0))
+        ) + int(costs.get("transport", 0)) + int(costs.get("hotel", 0))
 
     while total_cost() > budget:
         best = None  # (day, index, fee)

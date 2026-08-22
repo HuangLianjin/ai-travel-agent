@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+import json
+import math
 import os
+import re
+import time
 from datetime import date, timedelta
 from typing import Any
 
 import httpx
+
+from app.llm import get_llm
+from app.tools.external import MapMCPTool, WebSearchTool
+
+_TICKET_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_TICKET_CACHE_TTL_SECONDS = 24 * 60 * 60
+
+_RESTAURANT_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
+_RESTAURANT_CACHE_TTL_SECONDS = 24 * 60 * 60
+
+_HOTEL_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_HOTEL_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 
 class LiveDataService:
@@ -26,73 +42,238 @@ class LiveDataService:
         self.taxi_key = os.getenv("TAXI_API_KEY", "")
         self.bike_url = os.getenv("BIKE_API_URL", "")
         self.bike_key = os.getenv("BIKE_API_KEY", "")
+        self.map_mcp = MapMCPTool()
+        self.web_search = WebSearchTool()
+        self.llm = get_llm()
 
     async def enrich_plan(
         self, plan: dict[str, Any], departure_date: str = ""
     ) -> dict[str, Any]:
-        for day in plan.get("days", []):
-            for item in day.get("attractions", []):
-                await self._enrich_ticket(item, plan.get("city", ""), departure_date)
-            for item in day.get("dining", []):
-                await self._enrich_restaurant(item, plan.get("city", ""))
-        plan["hotel_options"] = await self._hotels(
-            plan.get("city", ""), departure_date
+        city = str(plan.get("city") or "")
+        days = plan.get("days") or []
+        travelers = max(
+            1, int((plan.get("params") or {}).get("travelers", 2) or 2)
         )
+        nights = max(0, len(days) - 1)
+        for day in days:
+            for item in day.get("attractions", []):
+                await self._enrich_ticket(item, city, departure_date)
+            for item in day.get("dining", []):
+                await self._enrich_restaurant(item, city)
+        plan["hotel_options"] = await self._hotels(
+            city, departure_date, nights, travelers
+        )
+        if plan["hotel_options"]:
+            cheapest = min(
+                plan["hotel_options"],
+                key=lambda h: (
+                    h.get("price")
+                    if isinstance(h.get("price"), (int, float))
+                    else 10**9
+                ),
+            )
+            price = cheapest.get("price")
+            if isinstance(price, (int, float)) and nights > 0:
+                plan["hotel"] = {
+                    **cheapest,
+                    "price_per_night": int(price),
+                    "nights": nights,
+                    "total_price": int(price) * nights,
+                    "room_type": cheapest.get("room_type", "大床房"),
+                    "source": "Booking.com RapidAPI",
+                }
         return plan
 
     async def _enrich_ticket(
-        self, item: dict[str, Any], city: str, date: str
+        self, item: dict[str, Any], city: str, departure_date: str
     ) -> None:
-        if not self.ticket_url:
+        name = str(item.get("name") or "")
+        if not name:
             return
-        data = await self._call(
-            self.ticket_url,
-            self.ticket_key,
-            {"name": item.get("name", ""), "city": city, "date": date},
-        )
-        if not data:
+        if item.get("fee") and str(item.get("price_source") or "") not in ("", "估算价"):
             return
+        if self.ticket_url:
+            data = await self._call(
+                self.ticket_url,
+                self.ticket_key,
+                {"name": name, "city": city, "date": departure_date},
+            )
+            if data:
+                self._apply_ticket(item, data)
+                return
+        ticket = await self._ticket_from_web(name, city)
+        if ticket:
+            self._apply_ticket(item, ticket)
+
+    @staticmethod
+    def _apply_ticket(item: dict[str, Any], data: dict[str, Any]) -> None:
         if data.get("fee") is not None:
-            item["fee"] = data["fee"]
+            try:
+                item["fee"] = int(float(data["fee"]))
+            except (TypeError, ValueError):
+                pass
         if data.get("opening_hours"):
             item["opening_hours"] = data["opening_hours"]
         if data.get("available") is not None:
             item["available"] = data["available"]
         if data.get("note"):
             item["note"] = data["note"]
-        item["price_source"] = "票务API"
+        url = data.get("official_url") or data.get("source_url")
+        if url:
+            item["official_url"] = url
+        if data.get("fee") is not None:
+            item["price_source"] = data.get("price_source") or "网络参考价"
+            item["data_level"] = "B"
+            item["data_label"] = "参考价"
+
+    async def _ticket_from_web(
+        self, name: str, city: str
+    ) -> dict[str, Any] | None:
+        key = f"{city}|{name}"
+        cached = _TICKET_CACHE.get(key)
+        if cached and time.time() - cached[0] < _TICKET_CACHE_TTL_SECONDS:
+            return cached[1]
+        query = f"{name} {city} 门票价格 官方 预约"
+        try:
+            results = await self.web_search.search(query, top_k=5)
+        except Exception:
+            results = []
+        snippets = [
+            str(r.get("content") or r.get("snippet") or "")
+            for r in results
+        ]
+        urls = [str(r.get("url") or "") for r in results if r.get("url")]
+        text = "\n".join(snippets)[:3000]
+        parsed: dict[str, Any] = {}
+        if text and self.llm.settings.llm_mode == "openai":
+            parsed = await self._llm_extract_ticket(name, city, text)
+        if parsed.get("fee") is None:
+            fee = self._regex_ticket_price(text)
+            if fee:
+                parsed["fee"] = fee
+        if parsed.get("fee") is None:
+            return None
+        if not parsed.get("official_url") and urls:
+            parsed["official_url"] = urls[0]
+        parsed.setdefault("price_source", "网络参考价")
+        _TICKET_CACHE[key] = (time.time(), parsed)
+        return parsed
+
+    async def _llm_extract_ticket(
+        self, name: str, city: str, text: str
+    ) -> dict[str, Any]:
+        system = (
+            "你是景区票务信息抽取器，只根据给定搜索结果抽取事实，禁止编造。"
+            "只输出 JSON，格式："
+            '{"fee": 数字或null, "opening_hours": "开放时间", '
+            '"official_url": "官方/权威来源", "note": "一句话说明", "available": true}'
+        )
+        user = f"景点：{name}\n城市：{city}\n搜索结果：\n{text}"
+        try:
+            content = await self.llm.complete(system, user)
+            match = re.search(r"\{.*\}", content, re.S)
+            if not match:
+                return {}
+            data = json.loads(match.group(0))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _regex_ticket_price(text: str) -> int | None:
+        match = re.search(
+            r"(?:门票|票价|成人票)[:：]?\s*¥\s*(\d{1,4})", text
+        )
+        if not match:
+            match = re.search(
+                r"(?:门票|票价|成人票)[:：]?\s*(\d{1,4})\s*元", text
+            )
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+        return None
 
     async def _enrich_restaurant(
         self, item: dict[str, Any], city: str
     ) -> None:
-        if not self.restaurant_url:
+        name = str(item.get("name") or "")
+        if not name:
             return
-        data = await self._call(
-            self.restaurant_url,
-            self.restaurant_key,
-            {"name": item.get("name", ""), "city": city},
-        )
-        if not data:
+        if self.restaurant_url:
+            data = await self._call(
+                self.restaurant_url,
+                self.restaurant_key,
+                {"name": name, "city": city},
+            )
+            if data:
+                if data.get("price") is not None:
+                    item["price"] = data["price"]
+                if data.get("status"):
+                    item["status"] = data["status"]
+                if data.get("note"):
+                    item["note"] = data["note"]
+                item["price_source"] = "餐厅API"
+        source = str(item.get("price_source") or "")
+        has_address = bool(item.get("address"))
+        has_price = item.get("price") is not None and "估算" not in source
+        if has_address and has_price and "高德" in source:
             return
-        if data.get("price") is not None:
-            item["price"] = data["price"]
-        if data.get("status"):
-            item["status"] = data["status"]
-        if data.get("note"):
-            item["note"] = data["note"]
-        item["price_source"] = "餐厅API"
+        cache_key = f"{city}|{name}"
+        cached = _RESTAURANT_CACHE.get(cache_key)
+        if cached and time.time() - cached[0] < _RESTAURANT_CACHE_TTL_SECONDS:
+            poi = cached[1]
+        else:
+            poi = await self.map_mcp.poi_detail(f"{city} {name}", city)
+            _RESTAURANT_CACHE[cache_key] = (time.time(), poi)
+        if not poi:
+            return
+        if not item.get("address"):
+            item["address"] = poi.get("address", "")
+        if not item.get("lat"):
+            item["lat"] = poi.get("lat", "")
+        if not item.get("lon"):
+            item["lon"] = poi.get("lon", "")
+        if poi.get("cost"):
+            try:
+                cost = int(float(poi["cost"]))
+                if cost > 0:
+                    item["price"] = cost
+                    item["price_source"] = "高德人均参考"
+                    item["data_level"] = "B"
+                    item["data_label"] = "参考价"
+            except (TypeError, ValueError):
+                pass
 
-    async def _hotels(self, city: str, date: str) -> list[dict[str, Any]]:
-        if self.hotel_provider in ("booking", "auto") and self.booking_rapidapi_key:
-            return await self._hotels_booking(city, date)
-        if not self.hotel_url:
+    async def _hotels(
+        self,
+        city: str,
+        departure_date: str,
+        nights: int,
+        travelers: int,
+    ) -> list[dict[str, Any]]:
+        if nights <= 0 or not city:
             return []
-        data = await self._call(
-            self.hotel_url,
-            self.hotel_key,
-            {"city": city, "check_in": date, "nights": 1},
-        )
-        return data.get("hotels", []) if isinstance(data, dict) else []
+        cache_key = f"{city}|{departure_date}|{nights}|{travelers}|{self.hotel_provider}"
+        cached = _HOTEL_CACHE.get(cache_key)
+        if cached and time.time() - cached[0] < _HOTEL_CACHE_TTL_SECONDS:
+            return cached[1]
+        if self.hotel_provider in ("booking", "auto") and self.booking_rapidapi_key:
+            hotels = await self._hotels_booking(
+                city, departure_date, nights, travelers
+            )
+        elif self.hotel_url:
+            data = await self._call(
+                self.hotel_url,
+                self.hotel_key,
+                {"city": city, "check_in": departure_date, "nights": nights},
+            )
+            hotels = data.get("hotels", []) if isinstance(data, dict) else []
+        else:
+            hotels = []
+        _HOTEL_CACHE[cache_key] = (time.time(), hotels)
+        return hotels
 
     async def _call(
         self, url: str, key: str, params: dict[str, Any]
@@ -110,17 +291,27 @@ class LiveDataService:
             return None
 
     async def _hotels_booking(
-        self, city: str, date_str: str
+        self,
+        city: str,
+        date_str: str,
+        nights: int,
+        travelers: int,
     ) -> list[dict[str, Any]]:
-        """Booking.com RapidAPI：城市搜索 + 当日真实房价。"""
+        """Booking.com RapidAPI：城市搜索 + 真实房价，按晚数与房型返回。"""
         if not self.booking_rapidapi_key:
             return []
         headers = {
             "X-RapidAPI-Key": self.booking_rapidapi_key,
             "X-RapidAPI-Host": self.booking_rapidapi_host,
         }
+        rooms = max(1, math.ceil(travelers / 2))
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            arrival = date.fromisoformat(date_str or "")
+        except ValueError:
+            arrival = date.today()
+        departure = arrival + timedelta(days=nights)
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
                 loc_resp = await client.get(
                     f"https://{self.booking_rapidapi_host}/v1/hotels/locations",
                     params={"name": city, "locale": "zh-cn"},
@@ -143,11 +334,6 @@ class LiveDataService:
                 if not dest_id:
                     return []
 
-                try:
-                    arrival = date.fromisoformat(date_str or "")
-                except ValueError:
-                    arrival = date.today()
-                departure = arrival + timedelta(days=1)
                 search_resp = await client.get(
                     f"https://{self.booking_rapidapi_host}/v1/hotels/search",
                     params={
@@ -158,7 +344,7 @@ class LiveDataService:
                         "order_by": "price",
                         "checkin_date": arrival.isoformat(),
                         "checkout_date": departure.isoformat(),
-                        "room_number": "1",
+                        "room_number": str(rooms),
                         "adults_number": "2",
                         "units": "metric",
                     },
@@ -172,6 +358,9 @@ class LiveDataService:
         results = []
         hotels = data.get("result", []) if isinstance(data, dict) else []
         hotels = [h for h in hotels if h.get("hotel_name") or h.get("name")]
+        room_type = "双床房" if travelers >= 2 else "大床房"
+        if rooms > 1:
+            room_type = f"双床房 x {rooms}"
         for h in hotels[:5]:
             price_breakdown = h.get("price_breakdown") or {}
             price = (
@@ -191,6 +380,9 @@ class LiveDataService:
                     or "",
                     "review_count": h.get("review_nr") or h.get("reviewCount") or 0,
                     "price": price,
+                    "price_per_night": price,
+                    "nights": nights,
+                    "room_type": room_type,
                     "currency": h.get("currencycode") or "CNY",
                     "distance_km": h.get("distance_to_cc") or h.get("distance") or "",
                     "lat": h.get("latitude") or h.get("lat") or "",

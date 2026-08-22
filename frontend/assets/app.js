@@ -1524,7 +1524,7 @@ createApp({
                     <a :href="amapNavUrl(leg)" target="_blank" rel="noopener" class="link-btn"><i data-lucide="map-pin"></i> 高德导航</a>
                   </div>
                   <div class="cost-line" v-if="trip.budget && trip.budget.daily_totals && trip.budget.daily_totals[currentDay.day-1]">
-                    Day {{ currentDay.day }} 消费：门票 ¥{{ trip.budget.daily_totals[currentDay.day-1].attractions }} + 餐饮 ¥{{ trip.budget.daily_totals[currentDay.day-1].dining }} + 交通 ¥{{ trip.budget.daily_totals[currentDay.day-1].transport }} = <b>¥{{ trip.budget.daily_totals[currentDay.day-1].total }}</b>
+                    Day {{ currentDay.day }} 消费：门票 ¥{{ trip.budget.daily_totals[currentDay.day-1].attractions }} + 餐饮 ¥{{ trip.budget.daily_totals[currentDay.day-1].dining }} + 交通 ¥{{ trip.budget.daily_totals[currentDay.day-1].transport }}<template v-if="trip.budget.daily_totals[currentDay.day-1].hotel"> + 酒店 ¥{{ trip.budget.daily_totals[currentDay.day-1].hotel }}</template> = <b>¥{{ trip.budget.daily_totals[currentDay.day-1].total }}</b>
                   </div>
                 </div>
                 <div v-if="dayPage === 1 && trip.hotel_options && trip.hotel_options.length" class="hotel-block">
