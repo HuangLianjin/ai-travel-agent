@@ -25,6 +25,10 @@ _HOTEL_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _HOTEL_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 
+def _has_cjk(name: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in str(name or ""))
+
+
 class LiveDataService:
     def __init__(self) -> None:
         self.ticket_url = os.getenv("TICKET_API_URL", "")
@@ -371,6 +375,8 @@ class LiveDataService:
             )
             if not isinstance(price, (int, float)):
                 price = None
+            else:
+                price = int(round(price))
             results.append(
                 {
                     "name": h.get("hotel_name") or h.get("name") or "",
@@ -392,4 +398,10 @@ class LiveDataService:
                     "source": "Booking.com RapidAPI",
                 }
             )
+        results.sort(
+            key=lambda h: (
+                0 if _has_cjk(h.get("name")) else 1,
+                h.get("price") if isinstance(h.get("price"), (int, float)) else 10**9,
+            )
+        )
         return results

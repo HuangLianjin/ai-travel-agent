@@ -898,7 +898,7 @@ createApp({
       if (t.hotel_options && t.hotel_options.length) {
         lines.push("住宿建议：");
         t.hotel_options.slice(0, 3).forEach((h) => {
-          lines.push(`- ${h.name}（${h.room_type || "大床房"} · ${h.price != null ? "¥" + h.price + "/晚" : "价格待询"}）`);
+          lines.push(`- ${h.name}（${h.room_type || "大床房"} · ${this.hotelPrice(h) != null ? "¥" + this.hotelPrice(h) + "/晚" : "价格待询"}）`);
         });
         lines.push("");
       }
@@ -1530,8 +1530,8 @@ createApp({
                 <div v-if="dayPage === 1 && trip.hotel_options && trip.hotel_options.length" class="hotel-block">
                   <h4>住宿建议</h4>
                   <div v-for="h in trip.hotel_options.slice(0, 3)" :key="h.name" class="small" style="padding:4px 0">
-                    <b>{{ h.name }}</b>
-                    <span class="muted"> · {{ h.room_type || '大床房' }} · {{ h.price != null ? '¥' + h.price + '/晚' : '价格待询' }}</span>
+                    <b class="hotel-name" :title="h.name">{{ h.name }}</b>
+                    <span class="muted"> · {{ h.room_type || '大床房' }} · {{ hotelPrice(h) != null ? '¥' + hotelPrice(h) + '/晚' : '价格待询' }}</span>
                     <div v-if="h.address" class="muted">地址：{{ h.address }}</div>
                     <a v-if="h.url" :href="h.url" target="_blank" rel="noopener" class="link-btn"><i data-lucide="external-link"></i> 查看</a>
                   </div>

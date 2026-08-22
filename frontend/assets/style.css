@@ -232,6 +232,7 @@ button { cursor: pointer; }
 .weather-block h4 { margin: 0 0 8px; }
 .hotel-block { border-left: 3px solid #0f766e; padding-left: 14px; margin: 10px 0; }
 .hotel-block h4 { margin: 0 0 6px; font-size: 13px; }
+.hotel-block .hotel-name { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .day-block { border-left: 3px solid var(--brand); padding-left: 14px; margin-bottom: 16px; }
 .day-block h4 { margin: 0 0 8px; }
 .route-leg {
