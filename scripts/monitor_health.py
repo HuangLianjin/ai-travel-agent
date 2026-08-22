@@ -12,18 +12,26 @@ ENV_FILE = Path(os.getenv("MONITOR_ENV_FILE", "/root/ai-travel-agent/.env"))
 HEALTH_URL = os.getenv("HEALTH_CHECK_URL", "http://127.0.0.1:8000/api/health")
 
 
-def load_webhook() -> str:
-    value = os.getenv("WECHAT_WEBHOOK", "")
+def _load_env(name: str) -> str:
+    value = os.getenv(name, "")
     if value:
         return value
     try:
         for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
             line = line.strip()
-            if line.startswith("WECHAT_WEBHOOK="):
+            if line.startswith(f"{name}="):
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
     except Exception:
         pass
     return ""
+
+
+def load_webhook() -> str:
+    return _load_env("WECHAT_WEBHOOK")
+
+
+def load_pushplus_token() -> str:
+    return _load_env("PUSHPLUS_TOKEN")
 
 
 def send_message(webhook: str, content: str) -> None:
@@ -41,8 +49,29 @@ def send_message(webhook: str, content: str) -> None:
         resp.read()
 
 
+def send_pushplus(token: str, content: str) -> None:
+    if not token:
+        return
+    payload = json.dumps(
+        {
+            "token": token,
+            "title": "星旅 Agent 监控告警",
+            "content": content[:1800],
+            "template": "txt",
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        "https://www.pushplus.plus/send",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
 def main() -> None:
     webhook = load_webhook()
+    pushplus = load_pushplus_token()
     error = ""
     try:
         with urllib.request.urlopen(HEALTH_URL, timeout=10) as resp:
@@ -61,6 +90,7 @@ def main() -> None:
     )
     print(message)
     send_message(webhook, message)
+    send_pushplus(pushplus, message)
 
 
 if __name__ == "__main__":
