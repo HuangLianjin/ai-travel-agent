@@ -20,13 +20,11 @@ from app.observability.metrics import metrics
 SENTRY_DSN = os.getenv("SENTRY_DSN", "")
 if SENTRY_DSN:
     import sentry_sdk
-    from sentry_sdk.integrations.asgi import SentryAsgiIntegration
 
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         environment=os.getenv("SENTRY_ENV", "production"),
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
-        integrations=[SentryAsgiIntegration()],
     )
 
 logging.basicConfig(level=logging.INFO)
