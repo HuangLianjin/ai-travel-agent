@@ -30,6 +30,15 @@ def _has_cjk(name: str) -> bool:
     return any("\u4e00" <= ch <= "\u9fff" for ch in str(name or ""))
 
 
+def display_hotel_name(name: str) -> str:
+    """中英混合名只保留中文部分，避免回复文本里出现英文酒店名。"""
+    text = str(name or "")
+    for i, ch in enumerate(text):
+        if "\u4e00" <= ch <= "\u9fff":
+            return text[i:]
+    return text
+
+
 class LiveDataService:
     def __init__(self) -> None:
         self.ticket_url = os.getenv("TICKET_API_URL", "")
@@ -496,6 +505,8 @@ class LiveDataService:
                 zh = translated.get(h.get("name", "")) or ""
                 if zh:
                     h["display_name"] = zh
+            if not h.get("display_name") and _has_cjk(h.get("name")):
+                h["display_name"] = display_hotel_name(h.get("name"))
         chinese = [
             h
             for h in results

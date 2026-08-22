@@ -623,7 +623,7 @@ class SynthesisAgent(BaseTravelAgent):
             for h in hotel_options[:3]:
                 price_txt = f"¥{h.get('price')}/晚" if h.get("price") else "价格待询"
                 labels.append(
-                    f"{h.get('name')}（{h.get('room_type') or '大床房'} · {price_txt}）"
+                    f"{h.get('display_name') or h.get('name')}（{h.get('room_type') or '大床房'} · {price_txt}）"
                 )
             response += (
                 "\n\n住宿建议：" + "；".join(labels) + "。"
@@ -929,6 +929,11 @@ class SynthesisAgent(BaseTravelAgent):
         if hotels:
             for i, h in enumerate(hotels):
                 h.setdefault("room_type", "大床房" if i == 0 else "双床房")
+                name = str(h.get("name") or "")
+                for j, ch in enumerate(name):
+                    if "\u4e00" <= ch <= "\u9fff":
+                        h["display_name"] = name[j:]
+                        break
             plan["hotel_options"] = hotels
         return hotels
 
