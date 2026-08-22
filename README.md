@@ -63,11 +63,9 @@ uvicorn app.main:app --port 8000
 - 普通用户：`demo` / `demo123`（需设置 `DEMO_SEED_ENABLED=true` 后自动创建）
 - 管理员：通过 `ADMIN_INIT_PASSWORD` 初始化，首次登录强制修改密码，不再提供公开默认密码
 
-## 在线部署（Render）
+## 在线部署（云服务器）
 
-仓库已包含 `render.yaml` 和 `Dockerfile.prod`。在 Render 连接本仓库后选择 Blueprint 或 Docker Web Service，填入 DeepSeek/Tavily/SerpAPI/高德/和风天气 Key，即可获得公网 HTTPS 演示地址。详细步骤见 [docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)。
-
-如果不想绑卡，也可以使用 Koyeb 免费 Docker 服务部署：见 [docs/KOYEB_DEPLOY.md](docs/KOYEB_DEPLOY.md)。
+项目使用 Docker 部署在云服务器，Nginx 反代 + HTTPS 后即可作为正式在线地址。详细步骤见 [docs/CHINA_CLOUD_DEPLOY.md](docs/CHINA_CLOUD_DEPLOY.md) 和 [docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)。
 
 ## 测试与评测
 
@@ -96,9 +94,7 @@ python -m app.eval.runner --output data/eval_report.json
 - 简历素材：[docs/RESUME_GUIDE.md](docs/RESUME_GUIDE.md)
 - 面试问答：[docs/INTERVIEW_Q_A.md](docs/INTERVIEW_Q_A.md)
 - 产品思考与面试叙事：[docs/INTERVIEW_NARRATIVE.md](docs/INTERVIEW_NARRATIVE.md)
-- GitHub 上传与在线演示：[docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)
-- Render 在线部署：[docs/RENDER_DEPLOY.md](docs/RENDER_DEPLOY.md)
-- Koyeb 免绑卡部署：[docs/KOYEB_DEPLOY.md](docs/KOYEB_DEPLOY.md)
+- GitHub 上传与云服务器部署：[docs/GITHUB_UPLOAD.md](docs/GITHUB_UPLOAD.md)
 - 国内轻量服务器部署：[docs/CHINA_CLOUD_DEPLOY.md](docs/CHINA_CLOUD_DEPLOY.md)
 - 监控告警配置：[docs/MONITORING.md](docs/MONITORING.md)
 

@@ -38,4 +38,4 @@ pytest 11 条单测 + 24 条业务评测 + 24 条主 Agent 评测，覆盖意图
 
 ## 10. 怎么部署？
 
-Dockerfile.prod + docker compose，GitHub Actions 跑 pytest/评测/镜像构建，支持 Render/Railway/云服务器 + Nginx HTTPS。
+Dockerfile.prod + docker compose，GitHub Actions 跑 pytest/评测/镜像构建，支持云服务器 + Nginx HTTPS。
