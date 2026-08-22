@@ -25,7 +25,13 @@ from app.config import get_settings
 from app.db import Database
 from app.llm import TravelLLM
 from app.observability.metrics import metrics
-from app.services.planner import apply_reflection_tuning
+from app.services.planner import (
+    apply_reflection_tuning,
+    detect_intent,
+    extract_params,
+    format_reply,
+)
+import time
 from app.rag.search import HybridSearcher
 from app.tools.content_source import SearchContentSource
 from app.tools.external import MapMCPTool, WebSearchTool
@@ -36,10 +42,39 @@ _NODE_MAP = {
     "transport": "specialist_transport",
 }
 
+_ADJUST_LOCAL_FIELDS = {"date", "departure_date", "budget", "days", "food", "attraction", "remove"}
+
+_PLAN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_PLAN_CACHE_TTL_SECONDS = 24 * 60 * 60
+
+
+def _plan_cache_key(params: dict[str, Any]) -> str:
+    def norm(value: Any, default: str = "") -> str:
+        if value in (None, "", 0, "0", [], "[]"):
+            return default
+        return str(value)
+    interests = params.get("interests") or []
+    if isinstance(interests, list):
+        interests = sorted(str(x) for x in interests if x)
+    return "|".join([
+        norm(params.get("city")),
+        norm(params.get("days")),
+        norm(params.get("travelers")),
+        norm(params.get("budget")),
+        ",".join(interests),
+        norm(params.get("departure_date")),
+    ])
 
 def _fan_out(state: TravelState) -> list[Send]:
     plan = state.get("task_plan", {})
     subtasks = plan.get("subtasks", [])
+    changed = plan.get("changed_fields") or []
+    if (
+        state.get("intent") == "adjust"
+        and changed
+        and all(f in _ADJUST_LOCAL_FIELDS for f in changed)
+    ):
+        return [Send("synthesis", state)]
     sends: list[Send] = []
     for st in subtasks:
         node = _NODE_MAP.get(st.get("type"))
@@ -80,6 +115,8 @@ def _quality_router(state: TravelState) -> str:
 
 
 def _router(state: TravelState) -> str:
+    if state.get("cached_plan"):
+        return "finish"
     if state.get("intent") in ("ask", "chat"):
         return "finish"
     if state.get("intent") == "adjust":
@@ -165,7 +202,69 @@ def create_agent(
     async def main_parse(state: TravelState) -> dict[str, Any]:
         trip_id = state.get("trip_id", "")
         trip = db.get_trip(trip_id, state.get("user_id")) if trip_id else None
+        text = state.get("user_input", "")
+        if not trip_id and not trip:
+            try:
+                pre_params = extract_params(text)
+                pre_intent = detect_intent(text, has_trip=False)
+                if pre_intent == "create" and (pre_params or {}).get("city"):
+                    pre_params = dict(pre_params)
+                    pre_params.setdefault(
+                        "departure_date",
+                        (date.today() + timedelta(days=1)).isoformat(),
+                    )
+                    pre_params.setdefault("days", 2)
+                    pre_params.setdefault("travelers", 1)
+                    cache_key = _plan_cache_key(pre_params)
+                    cached = _PLAN_CACHE.get(cache_key)
+                    if cached and time.time() - cached[0] < _PLAN_CACHE_TTL_SECONDS:
+                        plan = cached[1]
+                        return {
+                            "intent": "create",
+                            "params": pre_params,
+                            "task_plan": {
+                                "main_intent": "create",
+                                "params": pre_params,
+                                "changed_fields": [],
+                                "subtasks": [],
+                                "retry_policy": {"max_retries": 2, "retry_agents": []},
+                            },
+                            "cached_plan": True,
+                            "itinerary": plan,
+                            "response": format_reply(plan, "create"),
+                            "version": plan.get("version", 1),
+                            "quality_ok": True,
+                            "retry_count": 0,
+                            "history": [{"role": "user", "content": text}],
+                            "rewritten_input": text,
+                            "keywords": [],
+                            "session_memory": {
+                                "last_intent": "create",
+                                "last_params": pre_params,
+                                "has_existing_trip": False,
+                            },
+                        }
+            except Exception:
+                pass
         planned = await main_agent.plan({**state, "existing_trip": trip})
+        if (
+            planned.get("intent") == "create"
+            and not trip_id
+            and (planned.get("params") or {}).get("city")
+        ):
+            cache_key = _plan_cache_key(planned.get("params") or {})
+            cached = _PLAN_CACHE.get(cache_key)
+            if cached and time.time() - cached[0] < _PLAN_CACHE_TTL_SECONDS:
+                plan = cached[1]
+                return {
+                    **planned,
+                    "cached_plan": True,
+                    "itinerary": plan,
+                    "response": format_reply(plan, "create"),
+                    "version": plan.get("version", 1),
+                    "quality_ok": True,
+                    "retry_count": 0,
+                }
         if planned.get("intent") in ("ask", "chat"):
             planned["response"] = await llm.complete(
                 "你是旅行助手，简短回答用户即可。", state.get("user_input", "")
@@ -237,12 +336,12 @@ def create_agent(
 
     async def reflect(state: TravelState) -> dict[str, Any]:
         changed = (state.get("task_plan") or {}).get("changed_fields") or []
-        only_date = (
+        local_adjust = (
             state.get("intent") == "adjust"
             and changed
-            and all(f in ("date", "departure_date") for f in changed)
+            and all(f in _ADJUST_LOCAL_FIELDS for f in changed)
         )
-        if only_date:
+        if local_adjust:
             plan = state.get("itinerary") or {}
             return {
                 "agent_results": list(state.get("agent_results") or []),
@@ -298,8 +397,15 @@ def create_agent(
                     title=_trip_title(plan, params),
                     city=plan.get("city") or params.get("city") or None,
                 )
+        if state.get("intent") == "create" and plan and params.get("city"):
+            _PLAN_CACHE[_plan_cache_key(params)] = (time.time(), plan)
         metrics.record_stage("finish")
         return {"response": response, "trip_id": trip_id}
+        return {
+            "response": response,
+            "trip_id": trip_id,
+            "cached_plan": state.get("cached_plan", False),
+        }
 
     workflow = StateGraph(TravelState)
     workflow.add_node("main_parse", _with_stage("main_parse", "任务规划", main_parse))
@@ -331,7 +437,12 @@ def create_agent(
     workflow.add_conditional_edges(
         "dispatch",
         _fan_out,
-        ["specialist_attraction", "specialist_food", "specialist_transport"],
+        [
+            "specialist_attraction",
+            "specialist_food",
+            "specialist_transport",
+            "synthesis",
+        ],
     )
     workflow.add_edge("specialist_attraction", "route_optimize")
     workflow.add_edge("specialist_food", "route_optimize")

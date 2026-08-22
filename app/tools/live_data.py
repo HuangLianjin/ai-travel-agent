@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
@@ -59,15 +60,26 @@ class LiveDataService:
             1, int((plan.get("params") or {}).get("travelers", 2) or 2)
         )
         nights = max(0, len(days) - 1)
+        tasks: list[asyncio.Task[None]] = []
         for day in days:
             for item in day.get("attractions", []):
-                await self._enrich_ticket(item, city, departure_date)
+                tasks.append(
+                    asyncio.create_task(
+                        self._enrich_ticket(item, city, departure_date)
+                    )
+                )
             for item in day.get("dining", []):
-                await self._enrich_restaurant(item, city)
-            self._sync_timeline(day)
-        plan["hotel_options"] = await self._hotels(
-            city, departure_date, nights, travelers
+                tasks.append(
+                    asyncio.create_task(self._enrich_restaurant(item, city))
+                )
+        hotel_task = asyncio.create_task(
+            self._hotels(city, departure_date, nights, travelers)
         )
+        if tasks:
+            await asyncio.gather(*tasks)
+        plan["hotel_options"] = await hotel_task
+        for day in days:
+            self._sync_timeline(day)
         if plan["hotel_options"]:
             cheapest = min(
                 plan["hotel_options"],
@@ -180,9 +192,32 @@ class LiveDataService:
         if url:
             item["official_url"] = url
         if data.get("fee") is not None:
-            item["price_source"] = data.get("price_source") or "网络参考价"
-            item["data_level"] = "B"
-            item["data_label"] = "参考价"
+            url = str(data.get("official_url") or data.get("source_url") or "")
+            level, label = "B", "平台参考价"
+            if any(k in url for k in (".gov.cn", "mct.gov.cn")):
+                level, label = "A", "官方价格"
+            elif any(
+                k in url
+                for k in (
+                    "trip.com",
+                    "ctrip",
+                    "qunar",
+                    "mafengwo",
+                    "qyer",
+                    "meituan",
+                    "dianping",
+                    "booking.com",
+                    "zhihu",
+                    "baike.baidu",
+                    "sina",
+                    "sohu",
+                    "qq.com",
+                )
+            ):
+                level, label = "B", "平台参考价"
+            item["price_source"] = data.get("price_source") or label
+            item["data_level"] = level
+            item["data_label"] = label
 
     async def _ticket_from_web(
         self, name: str, city: str

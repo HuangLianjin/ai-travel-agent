@@ -63,8 +63,7 @@ from app.security import (
     verify_totp,
 )
 from app.services.planner import _recompute_costs, build_itinerary
-from app.services.price_enrich import enrich_plan_with_prices
-from app.tools.live_data import LiveDataService
+from app.services.price_enrich import enrich_plan_with_prices, record_pending_prices
 
 router = APIRouter()
 
@@ -599,23 +598,21 @@ async def chat(
                         final_state = data
 
                 plan = final_state.get("itinerary", {})
-                _live_params = final_state.get("params") or plan.get("params") or {}
-                plan = await LiveDataService().enrich_plan(
-                    plan, _live_params.get("departure_date", "")
-                )
                 plan = enrich_plan_with_prices(plan, db)
                 plan = _recompute_costs(plan)
-                _params = final_state.get("params") or plan.get("params") or {}
-                await _sync_weather(
-                    plan,
-                    plan.get("city") or _params.get("city", ""),
-                    _params.get("departure_date", ""),
-                    max(
-                        1,
-                        len(plan.get("days") or [])
-                        or int(_params.get("days", 1) or 1),
-                    ),
-                )
+                if not final_state.get("cached_plan"):
+                    record_pending_prices(plan, db)
+                    _params = final_state.get("params") or plan.get("params") or {}
+                    await _sync_weather(
+                        plan,
+                        plan.get("city") or _params.get("city", ""),
+                        _params.get("departure_date", ""),
+                        max(
+                            1,
+                            len(plan.get("days") or [])
+                            or int(_params.get("days", 1) or 1),
+                        ),
+                    )
                 response = final_state.get("response", "") or ""
                 trip_id = final_state.get("trip_id", effective_trip_id)
                 if trip_id:
@@ -711,22 +708,20 @@ async def chat(
             }
         )
         plan = state.get("itinerary", {})
-        _live_params = state.get("params") or plan.get("params") or {}
-        plan = await LiveDataService().enrich_plan(
-            plan, _live_params.get("departure_date", "")
-        )
         plan = enrich_plan_with_prices(plan, db)
         plan = _recompute_costs(plan)
-        _params = state.get("params") or plan.get("params") or {}
-        await _sync_weather(
-            plan,
-            plan.get("city") or _params.get("city", ""),
-            _params.get("departure_date", ""),
-            max(
-                1,
-                len(plan.get("days") or []) or int(_params.get("days", 1) or 1),
-            ),
-        )
+        if not state.get("cached_plan"):
+            record_pending_prices(plan, db)
+            _params = state.get("params") or plan.get("params") or {}
+            await _sync_weather(
+                plan,
+                plan.get("city") or _params.get("city", ""),
+                _params.get("departure_date", ""),
+                max(
+                    1,
+                    len(plan.get("days") or []) or int(_params.get("days", 1) or 1),
+                ),
+            )
         response = state.get("response", "")
         trip_id = state.get("trip_id", effective_trip_id)
         if trip_id:

@@ -15,6 +15,7 @@ def _agent_results_reducer(
 
 
 class TravelState(TypedDict, total=False):
+    cached_plan: bool
     user_input: str
     user_id: int | None
     trip_id: str

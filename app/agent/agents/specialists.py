@@ -615,7 +615,8 @@ class SynthesisAgent(BaseTravelAgent):
         from app.tools.live_data import LiveDataService
 
         plan = await LiveDataService().enrich_plan(plan, departure_date)
-        plan["hotel_options"] = await self._search_hotel_options(plan)
+        if not plan.get("hotel_options"):
+            plan["hotel_options"] = await self._search_hotel_options(plan)
         hotel_options = plan.get("hotel_options") or []
         if hotel_options:
             labels = []
