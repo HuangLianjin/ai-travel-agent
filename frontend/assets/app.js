@@ -880,7 +880,8 @@ createApp({
         }
         (day.timeline || []).forEach((item) => {
           const typeLabel = item.type === "attraction" ? "景点" : item.type === "food" ? "美食" : item.type === "transport" ? "交通" : item.type === "hotel_return" ? "回酒店" : item.type === "rest" ? "休息" : "其他";
-          let line = `${item.time} ${typeLabel} ${item.restaurant ? item.restaurant + "（" + item.title + "）" : item.title}`;
+          const itemName = item.restaurant && item.restaurant !== item.title ? `${item.restaurant}（${item.title}）` : (item.title || item.restaurant || "");
+          let line = `${item.time} ${typeLabel} ${itemName}`;
           if (item.mode && item.type === "transport") {
             line += ` · ${this.transportModeName(item.mode)} · ${item.minutes}分钟`;
             if (item.cost_yuan != null) line += ` · ¥${this.transportCost(item)}`;
@@ -1495,7 +1496,7 @@ createApp({
                     <span class="tl-time">{{ t.time }}</span>
                     <span class="tl-type">{{ t.type === 'attraction' ? '景点' : t.type === 'food' ? '美食' : t.type === 'photo' ? '拍照' : t.type === 'hotel_return' ? '回酒店' : t.type === 'rest' ? '休息' : '交通' }}</span>
                     <div class="tl-body">
-                      <b>{{ t.restaurant ? t.restaurant + '（' + t.title + '）' : t.title }}</b>
+                      <b>{{ t.restaurant && t.restaurant !== t.title ? t.restaurant + '（' + t.title + '）' : (t.title || t.restaurant) }}</b>
                       <span v-if="t.data_label" class="data-badge" :class="'lv-' + (t.data_level || 'C')">{{ t.data_label }}</span>
                       <span v-if="t.mode && t.type === 'transport'" class="muted"> · {{ transportModeName(t.mode) }} · {{ t.minutes }}分钟<template v-if="t.cost_yuan != null"> · ¥{{ transportCost(t) }}</template><template v-if="t.cost_yuan == null"> · 费用待定</template></span>
                       <div v-if="t.steps && t.steps.length" class="muted">换乘：{{ t.steps.join('；') }}</div>
