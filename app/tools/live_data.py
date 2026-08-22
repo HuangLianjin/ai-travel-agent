@@ -117,6 +117,31 @@ class LiveDataService:
             ):
                 if src.get(field):
                     item[field] = src[field]
+
+    async def _translate_hotel_names(
+        self, names: list[str], city: str
+    ) -> dict[str, str]:
+        if not names or self.llm.settings.llm_mode != "openai":
+            return {}
+        system = (
+            "你是酒店名翻译器。把英文酒店名翻译成简洁、符合中文习惯的名称，"
+            "不要加引号和解释。只输出 JSON，格式 {\"0\": \"中文名\", \"1\": \"中文名\"}。"
+        )
+        lines = "\n".join(f"{i}. {name}" for i, name in enumerate(names))
+        try:
+            content = await self.llm.complete(system, f"城市：{city}\n{lines}")
+            match = re.search(r"\{.*\}", content, re.S)
+            if not match:
+                return {}
+            data = json.loads(match.group(0))
+            result: dict[str, str] = {}
+            for i, name in enumerate(names):
+                zh = data.get(str(i))
+                if zh and isinstance(zh, str):
+                    result[name] = zh.strip()
+            return result
+        except Exception:
+            return {}
     async def _enrich_ticket(
         self, item: dict[str, Any], city: str, departure_date: str
     ) -> None:
@@ -427,10 +452,35 @@ class LiveDataService:
                     "source": "Booking.com RapidAPI",
                 }
             )
-        results.sort(
-            key=lambda h: (
-                0 if _has_cjk(h.get("name")) else 1,
-                h.get("price") if isinstance(h.get("price"), (int, float)) else 10**9,
-            )
+        english_names = [
+            h.get("name", "") for h in results if not _has_cjk(h.get("name"))
+        ]
+        translated = await self._translate_hotel_names(english_names, city)
+        for h in results:
+            if not _has_cjk(h.get("name")):
+                zh = translated.get(h.get("name", "")) or ""
+                if zh:
+                    h["display_name"] = zh
+        chinese = [
+            h
+            for h in results
+            if _has_cjk(h.get("name") or h.get("display_name"))
+        ]
+        english = [
+            h
+            for h in results
+            if not _has_cjk(h.get("name") or h.get("display_name"))
+        ]
+        chinese.sort(
+            key=lambda h: h.get("price")
+            if isinstance(h.get("price"), (int, float))
+            else 10**9
         )
-        return results
+        english.sort(
+            key=lambda h: h.get("price")
+            if isinstance(h.get("price"), (int, float))
+            else 10**9
+        )
+        if len(chinese) >= 3:
+            return chinese[:5]
+        return chinese + english

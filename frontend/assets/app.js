@@ -847,6 +847,19 @@ createApp({
       const n = Number(h && h.price);
       return Number.isFinite(n) ? Math.round(n) : null;
     },
+    displayHotels() {
+      const list = (this.trip && this.trip.hotel_options) || [];
+      const cn = list.filter((h) => /[\\u4e00-\\u9fff]/.test(String(h.name || "")));
+      return cn.length >= 3 ? cn.slice(0, 3) : list.slice(0, 3);
+    },
+    displayHotelName(h) {
+      if (h && h.display_name) return h.display_name;
+      const name = String(h && h.name || "");
+      for (let i = 0; i < name.length; i++) {
+        if (/[\\u4e00-\\u9fff]/.test(name[i])) return name.slice(i);
+      }
+      return name;
+    },
     timelinePrice(t) {
       const n = Number((this.trip && this.trip.params && this.trip.params.travelers) || 1);
       const unit = t && t.type === "attraction" ? Number(t.fee || t.price || 0) : Number(t && t.price || 0);
@@ -907,8 +920,8 @@ createApp({
       });
       if (t.hotel_options && t.hotel_options.length) {
         lines.push("住宿建议：");
-        t.hotel_options.slice(0, 3).forEach((h) => {
-          lines.push(`- ${h.name}（${h.room_type || "大床房"} · ${this.hotelPrice(h) != null ? "¥" + this.hotelPrice(h) + "/晚" : "价格待询"}）`);
+        this.displayHotels().forEach((h) => {
+          lines.push(`- ${this.displayHotelName(h)}（${h.room_type || "大床房"} · ${this.hotelPrice(h) != null ? "¥" + this.hotelPrice(h) + "/晚" : "价格待询"}）`);
         });
         lines.push("");
       }
@@ -1539,8 +1552,8 @@ createApp({
                 </div>
                 <div v-if="dayPage === 1 && trip.hotel_options && trip.hotel_options.length" class="hotel-block">
                   <h4>住宿建议</h4>
-                  <div v-for="h in trip.hotel_options.slice(0, 3)" :key="h.name" class="small" style="padding:4px 0">
-                    <b class="hotel-name" :title="h.name">{{ h.name }}</b>
+                  <div v-for="h in displayHotels()" :key="h.name" class="small" style="padding:4px 0">
+                    <b class="hotel-name" :title="h.name">{{ displayHotelName(h) }}</b>
                     <span class="muted"> · {{ h.room_type || '大床房' }} · {{ hotelPrice(h) != null ? '¥' + hotelPrice(h) + '/晚' : '价格待询' }}</span>
                     <div v-if="h.address" class="muted">地址：{{ h.address }}</div>
                     <a v-if="h.url" :href="h.url" target="_blank" rel="noopener" class="link-btn"><i data-lucide="external-link"></i> 查看</a>
