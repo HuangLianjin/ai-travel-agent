@@ -104,7 +104,8 @@ class MainAgent:
             "提取搜索关键词，识别意图并提取行程参数。只输出 JSON，不要 Markdown。"
             "intent 只能是 create/adjust/ask/chat。"
             "如果是调整已有行程，只返回需要修改的字段；用户说“改到/换成/变成某城市”时必须更新 city。"
-            '输出格式：{"rewritten_text":"...","keywords":["..."],"intent":"create","params":{"city":"北京","days":3},"changed_fields":[]}'
+            "预算 budget 是上限；用户说“消费不低于/至少花/最低消费”时填 min_spend，两者可以同时存在。"
+            '输出格式：{"rewritten_text":"...","keywords":["..."],"intent":"create","params":{"city":"北京","days":3,"budget":2000,"min_spend":1500},"changed_fields":[]}'
         )
         existing = json.dumps((trip or {}).get("params") or {}, ensure_ascii=False)
         history_text = ""

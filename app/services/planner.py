@@ -461,16 +461,35 @@ def extract_params(text: str) -> dict[str, Any]:
         explicit.append("travelers")
     travelers = travelers or 1
 
-    budget: int | None = None
+    min_spend: int | None = None
     for pattern in (
-        r"(?:预算|花费|不能超过|不超过|控制在|上限)\s*(\d{3,6})\s*(?:元|块)?",
-        r"(\d{3,6})\s*元",
-        r"(\d{3,6})\s*以内",
+        r"(?:消费|花费|花|金额)\s*(?:不低于|不能低于|不得低于|至少|最少|达到|超过|高于|大于|以上)\s*(\d{3,6})",
+        r"(?:不低于|不能低于|不得低于|至少|最少|最低)\s*(\d{3,6})\s*(?:元|块)?",
+        r"(?:至少|最少|最低|必须)\s*(?:花|消费|花费)?\s*(\d{3,6})",
+        r"花\s*(?:够|到|满|足)\s*(\d{3,6})",
+        r"(\d{3,6})\s*元(?:以上|起)",
     ):
         m = re.search(pattern, text)
         if m:
-            budget = int(m.group(1))
+            min_spend = int(m.group(1))
+            explicit.append("min_spend")
+            break
+
+    budget: int | None = None
+    for pattern in (
+        r"(?:预算|不能超过|不超过|控制在|上限|最多)\s*(\d{3,6})\s*(?:元|块)?",
+        r"(\d{3,6})\s*元以内",
+        r"(\d{3,6})\s*以内",
+        r"(\d{3,6})\s*元",
+    ):
+        m = re.search(pattern, text)
+        if m:
+            amount = int(m.group(1))
+            if min_spend and amount == min_spend:
+                continue
+            budget = amount
             explicit.append("budget")
+            break
             break
 
     transport_explicit = False
@@ -528,6 +547,7 @@ def extract_params(text: str) -> dict[str, Any]:
         "days": days,
         "travelers": travelers,
         "budget": budget,
+        "min_spend": min_spend,
         "transport": transport,
         "interests": list(dict.fromkeys(interests)),
         "departure_date": departure_date,
@@ -642,12 +662,18 @@ def _recompute_costs(plan: dict[str, Any]) -> dict[str, Any]:
         "dining": total_dining,
         "transport": total_transport,
         "hotel": hotel_total,
+        "min_spend": _to_int((plan.get("params") or {}).get("min_spend") or 0),
         "estimated_total": total_attractions + total_dining + total_transport + hotel_total,
     }
     for key in ("spend_mode", "max_consumption"):
         if key in old_budget:
             plan["budget"][key] = old_budget[key]
     plan["budget"]["max_consumption"] = plan["budget"]["estimated_total"]
+    min_spend_value = _to_int((plan.get("params") or {}).get("min_spend") or 0)
+    if min_spend_value > 0:
+        plan["budget"]["within_min_spend"] = (
+            int(plan["budget"]["estimated_total"]) >= min_spend_value
+        )
     budget_value = (plan.get("params") or {}).get("budget")
     if budget_value not in (None, "", 0):
         within = int(plan["budget"]["estimated_total"]) <= int(budget_value)
@@ -662,26 +688,114 @@ def _recompute_costs(plan: dict[str, Any]) -> dict[str, Any]:
     return plan
 
 
-def _enforce_budget(plan: dict[str, Any]) -> dict[str, Any]:
-    """预算硬约束：超预算时先删高费用景点，再删高价餐饮，保证估算总价不超过预算。"""
+def _enforce_min_spend(
+    plan: dict[str, Any], docs: list[dict] | None = None
+) -> dict[str, Any]:
+    """最低消费约束：不足时补充推荐景点/美食，直到达到 min_spend。"""
+    params = plan.get("params") or {}
+    min_spend = _to_int(params.get("min_spend") or 0)
+    if min_spend <= 0:
+        return plan
     plan = _recompute_costs(plan)
+    budget_value = params.get("budget")
+    if budget_value not in (None, "", 0) and min_spend > int(budget_value):
+        issues = plan.setdefault("validation_issues", [])
+        issue = f"最低消费 {min_spend} 高于预算 {budget_value}，无法同时满足"
+        if issue not in issues:
+            issues.append(issue)
+        return plan
+    docs = docs or []
+    city = plan.get("city") or params.get("city") or ""
+    used = {
+        a.get("name")
+        for day in plan.get("days", []) or []
+        for a in day.get("attractions", []) or []
+    } | {
+        f.get("name")
+        for day in plan.get("days", []) or []
+        for f in day.get("dining", []) or []
+    }
+    guard = 0
+    while int(plan["budget"].get("estimated_total", 0)) < min_spend and guard < 30:
+        candidates = [
+            d
+            for d in docs
+            if d.get("name")
+            and d.get("name") not in used
+            and d.get("category") in ("attraction", "food")
+            and (not d.get("city") or d.get("city") == city)
+        ]
+        candidates.sort(key=lambda d: -_to_int(d.get("fee") or d.get("price") or 0))
+        if not candidates:
+            break
+        doc = candidates[0]
+        used.add(doc.get("name"))
+        day = (plan.get("days") or [{}])[0]
+        if doc.get("category") == "attraction":
+            item = {
+                "name": doc.get("name", ""),
+                "category": "attraction",
+                "fee": _to_int(doc.get("fee") or doc.get("budget") or 0),
+                "duration_hours": doc.get("duration_hours", 2),
+                "opening_hours": doc.get("opening_hours", "全天"),
+                "note": doc.get("note", ""),
+                "source": doc.get("source", ""),
+            }
+            day.setdefault("attractions", []).append(item)
+            day.setdefault("activities", []).append(
+                {
+                    "name": item["name"],
+                    "duration_hours": item["duration_hours"],
+                    "opening_hours": item["opening_hours"],
+                    "fee": item["fee"],
+                    "note": item["note"],
+                }
+            )
+        elif doc.get("category") == "food":
+            day.setdefault("dining", []).append(
+                {
+                    "name": doc.get("name", ""),
+                    "category": "food",
+                    "price": _to_int(
+                        doc.get("fee") or doc.get("price") or doc.get("budget") or 0
+                    ),
+                    "note": doc.get("note", ""),
+                    "source": doc.get("source", ""),
+                }
+            )
+        plan = _recompute_costs(plan)
+        guard += 1
+    plan["budget"]["min_spend"] = min_spend
+    plan["budget"]["within_min_spend"] = (
+        int(plan["budget"].get("estimated_total", 0)) >= min_spend
+    )
+    return plan
+def _enforce_budget(
+    plan: dict[str, Any], docs: list[dict] | None = None
+) -> dict[str, Any]:
+    """预算与最低消费硬约束：不超上限、不低于最低消费。"""
+    plan = _recompute_costs(plan)
+    min_spend = _to_int((plan.get("params") or {}).get("min_spend") or 0)
+    if min_spend > 0:
+        plan = _enforce_min_spend(plan, docs)
+        plan = _recompute_costs(plan)
     budget_value = plan.get("params", {}).get("budget")
     if budget_value is None or budget_value in (0, "", "0"):
         return plan
     budget = int(budget_value)
     costs = plan["budget"]
-
     def total_cost() -> int:
         return int(costs.get("attractions", 0)) + int(
             costs.get("dining", 0)
         ) + int(costs.get("transport", 0)) + int(costs.get("hotel", 0))
-
     while total_cost() > budget:
         best = None  # (day, index, fee)
         for day in plan.get("days", []):
             for idx, item in enumerate(day.get("attractions", [])):
                 fee = _to_int(item.get("fee", 0))
                 if fee > 0 and (best is None or fee > best[2]):
+                    if min_spend > 0 and total_cost() - fee < min_spend:
+                        continue
                     best = (day, idx, fee)
         if best:
             day, idx, fee = best
@@ -693,12 +807,13 @@ def _enforce_budget(plan: dict[str, Any]) -> dict[str, Any]:
             plan = _recompute_costs(plan)
             costs = plan["budget"]
             continue
-
         best_food = None
         for day in plan.get("days", []):
             for idx, food in enumerate(day.get("dining", [])):
                 price = _to_int(food.get("price") or food.get("budget") or 0)
                 if price > 0 and (best_food is None or price > best_food[2]):
+                    if min_spend > 0 and total_cost() - price < min_spend:
+                        continue
                     best_food = (day, idx, price)
         if best_food:
             day, idx, price = best_food
@@ -707,7 +822,6 @@ def _enforce_budget(plan: dict[str, Any]) -> dict[str, Any]:
             costs = plan["budget"]
             continue
         break
-
     costs["estimated_total"] = total_cost()
     costs["within_budget"] = total_cost() <= budget
     if not costs["within_budget"]:
@@ -715,8 +829,6 @@ def _enforce_budget(plan: dict[str, Any]) -> dict[str, Any]:
         if "超出预算" not in issues:
             issues.append(f"超出预算：{total_cost()} > {budget}")
     return autocorrect_plan(plan)
-
-
 _LOW_SPEND_WORDS = ("省钱", "便宜", "少花", "节约", "控制预算", "不要太贵", "尽量少", "预算低", "少一点")
 
 
@@ -927,7 +1039,7 @@ def build_itinerary(
     plan = autocorrect_plan(plan)
     plan = _ensure_min_spend(plan, docs, params)
     plan = _decorate_plan(plan)
-    plan = _enforce_budget(plan)
+    plan = _enforce_budget(plan, docs)
     return _refresh_timeline(plan)
 def _increase_spending(
     plan: dict[str, Any],
@@ -937,7 +1049,7 @@ def _increase_spending(
     """消费太少时：把所有推荐景点和美食补进行程，预算内取最高消费。"""
     plan = _ensure_min_spend(plan, docs, params)
     plan["adjustment_note"] = "已按“消费太少”补充推荐景点和美食"
-    return _enforce_budget(plan)
+    return _enforce_budget(plan, docs)
 
 def apply_adjustment(
     plan: dict[str, Any],
@@ -980,7 +1092,7 @@ def apply_adjustment(
         plan["adjustment_note"] = "已按新的城市要求重新规划当前行程"
         plan = autocorrect_plan(plan)
         plan = _ensure_min_spend(plan, docs, params)
-        return _enforce_budget(plan)
+        return _enforce_budget(plan, docs)
 
     if any(k in instruction for k in ("消费太少", "金额太少", "太便宜", "花得太少", "预算没用完")):
         return _increase_spending(plan, docs, params)
@@ -1097,7 +1209,7 @@ def apply_adjustment(
     plan["days"] = days
     plan["adjustment_note"] = "已执行局部重规划，未全量重新生成"
     plan = autocorrect_plan(plan)
-    return _enforce_budget(plan)
+    return _enforce_budget(plan, docs)
 
 
 def _mode_cn(mode: str) -> str:

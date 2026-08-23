@@ -12,6 +12,7 @@ from app.services.planner import (
     _decorate_plan,
     _diversify_days,
     _enforce_budget,
+    _enforce_min_spend,
     _ensure_min_spend,
     _matches_removal,
     _merge_transport_legs,
@@ -615,6 +616,8 @@ class SynthesisAgent(BaseTravelAgent):
         from app.tools.live_data import LiveDataService
 
         plan = await LiveDataService().enrich_plan(plan, departure_date)
+        plan = _enforce_min_spend(plan, docs)
+        plan = _recompute_costs(plan)
         if not plan.get("hotel_options"):
             plan["hotel_options"] = await self._search_hotel_options(plan)
         hotel_options = plan.get("hotel_options") or []
