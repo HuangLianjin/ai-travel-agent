@@ -18,6 +18,7 @@ from app.services.planner import (
     _merge_transport_legs,
     _recompute_costs,
     _refresh_timeline,
+    _to_int,
     apply_adjustment,
     build_itinerary,
     format_reply,
@@ -373,9 +374,28 @@ class ReflectionAgent(BaseTravelAgent):
         notes: list[str] = []
 
         budget = plan.get("budget") or {}
+        params = plan.get("params") or {}
+        min_spend = _to_int(params.get("min_spend") or 0)
+        max_budget = _to_int(params.get("budget") or 0)
+        total = _to_int(budget.get("estimated_total") or 0)
+        ok = True
+        feedback: list[str] = []
+        if min_spend > 0 and total < min_spend:
+            notes.append(
+                f"当前总消费 {total} 低于最低消费 {min_spend}，需要补充景点/美食把总消费提高到 {min_spend} 以上"
+            )
+            feedback.append(
+                f"总消费 {total} 低于最低消费 {min_spend}，请补充高消费景点或美食，使总消费不低于 {min_spend}"
+            )
+            ok = False
+        if max_budget > 0 and total > max_budget:
+            notes.append(f"当前总消费 {total} 超过预算 {max_budget}，需要删减高消费项目")
+            feedback.append(
+                f"总消费 {total} 超过预算 {max_budget}，请删减高消费景点或美食，使总消费不超过 {max_budget}"
+            )
+            ok = False
         if budget.get("within_budget") is False:
             notes.append("当前估算超出预算，建议删减高消费项目或调整预算")
-
         hot_spots = ("故宫", "长城", "迪士尼", "大熊猫", "环球影城", "颐和园", "天安门")
         for day in plan.get("days", []):
             total = sum(leg.get("minutes", 0) for leg in day.get("route", []))
@@ -407,8 +427,6 @@ class ReflectionAgent(BaseTravelAgent):
 
         mode = "rules"
 
-        ok = True
-        feedback: list[str] = []
         for day in plan.get("days", []) or []:
             if not day.get("attractions") or not day.get("dining"):
                 ok = False
