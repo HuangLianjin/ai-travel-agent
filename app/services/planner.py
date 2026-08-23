@@ -665,10 +665,14 @@ def _recompute_costs(plan: dict[str, Any]) -> dict[str, Any]:
         "min_spend": _to_int((plan.get("params") or {}).get("min_spend") or 0),
         "estimated_total": total_attractions + total_dining + total_transport + hotel_total,
     }
-    for key in ("spend_mode", "max_consumption"):
+    for key in ("spend_mode", "max_consumption", "amount_constrained"):
         if key in old_budget:
             plan["budget"][key] = old_budget[key]
     plan["budget"]["max_consumption"] = plan["budget"]["estimated_total"]
+    plan["budget"]["amount_constrained"] = bool(
+        _to_int((plan.get("params") or {}).get("budget") or 0)
+        or _to_int((plan.get("params") or {}).get("min_spend") or 0)
+    )
     min_spend_value = _to_int((plan.get("params") or {}).get("min_spend") or 0)
     if min_spend_value > 0:
         plan["budget"]["within_min_spend"] = (
@@ -776,6 +780,11 @@ def _enforce_budget(
     """预算与最低消费硬约束：不超上限、不低于最低消费。"""
     plan = _recompute_costs(plan)
     min_spend = _to_int((plan.get("params") or {}).get("min_spend") or 0)
+    max_budget = _to_int((plan.get("params") or {}).get("budget") or 0)
+    if min_spend <= 0 and max_budget <= 0:
+        plan["budget"]["spend_mode"] = "guide_recommended"
+        plan["budget"]["amount_constrained"] = False
+        return plan
     if min_spend > 0:
         plan = _enforce_min_spend(plan, docs)
         plan = _recompute_costs(plan)
