@@ -61,6 +61,7 @@ def _plan_cache_key(params: dict[str, Any]) -> str:
         norm(params.get("days")),
         norm(params.get("travelers")),
         norm(params.get("budget")),
+        norm(params.get("min_spend")),
         ",".join(interests),
         norm(params.get("departure_date")),
     ])
