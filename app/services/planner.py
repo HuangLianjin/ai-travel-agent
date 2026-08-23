@@ -731,6 +731,16 @@ def _enforce_min_spend(
         ]
         candidates.sort(key=lambda d: -_to_int(d.get("fee") or d.get("price") or 0))
         if not candidates:
+            candidates = [
+                d
+                for d in build_docs()
+                if d.get("name")
+                and d.get("name") not in used
+                and d.get("category") in ("attraction", "food")
+                and (not d.get("city") or d.get("city") == city)
+            ]
+            candidates.sort(key=lambda d: -_to_int(d.get("fee") or d.get("price") or 0))
+        if not candidates:
             break
         doc = candidates[0]
         used.add(doc.get("name"))

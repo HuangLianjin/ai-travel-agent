@@ -1569,7 +1569,6 @@ createApp({
               <div class="total-cost" v-if="trip.budget">
                 <div>总消费：<b>¥{{ trip.budget.estimated_total }}</b>
                 <span v-if="trip.params && trip.params.budget"> / 预算 ¥{{ trip.params.budget }}</span>
-                <span v-if="trip.budget.min_spend"> / 最低消费 ¥{{ trip.budget.min_spend }}</span>
                 <span v-if="trip.budget.within_budget === false" class="muted">（超出预算）</span></div>
                 <div class="muted" style="font-size:12px;margin-top:4px">
                   门票 ¥{{ trip.budget.attractions }} + 餐饮 ¥{{ trip.budget.dining }} + 交通 ¥{{ trip.budget.transport }}
