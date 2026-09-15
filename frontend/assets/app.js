@@ -148,7 +148,7 @@ createApp({
       priceFeedback: [],
       priceDraft: { place_name: "", city: "", price: "", source: "人工维护", source_url: "", note: "" },
       metrics: null,
-      metricsDays: 7,
+      metricsDays: 30,
       agentRuns: [],
       evalFailures: [],
       evalFailureSummary: {},

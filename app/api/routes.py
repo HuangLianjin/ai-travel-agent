@@ -1540,7 +1540,7 @@ async def admin_set_recommend_slot(
 
 @router.get("/metrics")
 async def get_metrics(
-    days: int = 7,
+    days: int = 30,
     db: Database = Depends(get_db),
     user: dict = Depends(require_role("admin", "super_admin")),
 ):
@@ -1602,7 +1602,7 @@ async def admin_runs(
 
 @router.get("/admin/stats")
 async def admin_stats(
-    days: int = 7,
+    days: int = 30,
     db: Database = Depends(get_db),
     user: dict = Depends(require_role("admin", "super_admin")),
 ):
