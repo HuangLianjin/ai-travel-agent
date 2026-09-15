@@ -19,6 +19,7 @@
 - 运行 trace：每次生成保存 token、耗时、状态、错误
 - 管理大盘：成功率、P95、Token、成本、意图分布
 - 评测回流：低分样本落库，可在管理后台标记修复并审计
+- 用户满意度：行程 1-5 星反馈，1-2 星自动进入优化池
 - 健康监控：每 5 分钟探活，失败时 PushPlus/企业微信推送告警
 - Docker + GitHub Actions CI + 离线评测
 
@@ -88,7 +89,7 @@ python -m pytest tests -q
 python -m app.eval.runner --output data/eval_report.json
 ```
 
-当前结果：pytest 21/21 通过；业务评测 24/24，主 Agent 评测 24/24。
+当前结果：pytest 22/22 通过；业务评测 24/24，主 Agent 评测 24/24。
 
 真实 40 城基准：40/40 成功，平均耗时 39.6s，P95 47.2s，总 Token 150,590，成本约 0.79 元。
 

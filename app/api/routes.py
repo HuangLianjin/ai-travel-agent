@@ -48,6 +48,7 @@ from app.schemas import (
     SendCodeRequest,
     TotpEnableRequest,
     TotpRequest,
+    UserFeedbackCreate,
     VerifyPhoneRequest,
 )
 from app.sms import send_sms_code
@@ -1402,6 +1403,67 @@ async def submit_price_feedback(
     return {"id": feedback_id, "status": "pending"}
 
 
+@router.post("/feedback")
+async def submit_user_feedback(
+    req: UserFeedbackCreate,
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("user")),
+):
+    if (
+        req.target_type == "trip"
+        and req.target_id
+        and not db.get_trip(req.target_id, user["id"])
+    ):
+        raise HTTPException(status_code=404, detail="行程不存在")
+    feedback_id, low_score = db.save_user_feedback(
+        user_id=user["id"],
+        target_type=req.target_type,
+        target_id=req.target_id,
+        rating=req.rating,
+        tags=req.tags,
+        comment=req.comment,
+    )
+    audit(
+        db,
+        user["id"],
+        "submit_feedback",
+        req.target_type,
+        req.target_id,
+        f"rating={req.rating};low_score={low_score}",
+    )
+    return {
+        "id": feedback_id,
+        "status": "recorded",
+        "added_to_optimization": low_score,
+    }
+
+
+@router.get("/feedback/mine")
+async def my_user_feedback(
+    limit: int = 50,
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("user")),
+):
+    return db.list_user_feedback(
+        user_id=user["id"],
+        limit=max(1, min(200, limit)),
+    )
+
+
+@router.get("/admin/feedback")
+async def admin_user_feedback(
+    limit: int = 100,
+    offset: int = 0,
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    return db.list_user_feedback(
+        user_id=None,
+        limit=max(1, min(200, limit)),
+        offset=max(0, offset),
+    )
+
+
 @router.get("/admin/price-feedback")
 async def admin_price_feedback(
     db: Database = Depends(get_db),
@@ -1552,6 +1614,7 @@ async def get_metrics(
         input_price_per_1m=settings.llm_input_price_per_1m,
         output_price_per_1m=settings.llm_output_price_per_1m,
     )
+    feedback = db.user_feedback_summary(days=days)
     snapshot["days"] = days
     snapshot["request_count"] = runs["total_runs"]
     snapshot["success_count"] = runs["success_runs"]
@@ -1573,6 +1636,10 @@ async def get_metrics(
         str(row.get("status") or "unknown"): int(row.get("n") or 0)
         for row in runs["by_status"]
     }
+    snapshot["feedback_total"] = feedback["total"]
+    snapshot["feedback_avg_rating"] = feedback["avg_rating"]
+    snapshot["feedback_low_rating"] = feedback["low_ratings"]
+    snapshot["feedback_by_target"] = feedback["by_target"]
     return snapshot
 
 
@@ -1614,6 +1681,7 @@ async def admin_stats(
             input_price_per_1m=settings.llm_input_price_per_1m,
             output_price_per_1m=settings.llm_output_price_per_1m,
         ),
+        "feedback": db.user_feedback_summary(days=days),
         "metrics": metrics.snapshot(),
     }
 

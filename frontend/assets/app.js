@@ -152,6 +152,11 @@ createApp({
       agentRuns: [],
       evalFailures: [],
       evalFailureSummary: {},
+      adminFeedback: [],
+      tripFeedbackRating: 0,
+      tripFeedbackComment: "",
+      tripFeedbackSubmitted: false,
+      tripFeedbackSaving: false,
       adminGuides: [],
       adminGuidePage: 1,
       adminGuidePages: 1,
@@ -774,15 +779,17 @@ createApp({
       this.toastMsg(status === "approved" ? "反馈已采用" : "反馈已驳回");
     },
     async loadMetrics() {
-      const [m, runs, failures] = await Promise.all([
+      const [m, runs, failures, feedback] = await Promise.all([
         request(`/metrics?days=${this.metricsDays}`),
         request("/admin/runs?page=1&page_size=20"),
         request("/admin/eval-failures?status=open&limit=100"),
+        request("/admin/feedback?limit=50"),
       ]);
       this.metrics = m;
       this.agentRuns = (runs && runs.items) || [];
       this.evalFailures = (failures && failures.items) || [];
       this.evalFailureSummary = (failures && failures.summary) || {};
+      this.adminFeedback = feedback || [];
     },
     async setMetricsDays(days) {
       this.metricsDays = days;
@@ -817,6 +824,30 @@ createApp({
       });
       await this.loadMetrics();
       this.toastMsg("样本已标记为已修复");
+    },
+    async submitTripFeedback() {
+      if (!this.tripFeedbackRating || this.tripFeedbackSaving) return;
+      this.tripFeedbackSaving = true;
+      try {
+        await request("/feedback", {
+          method: "POST",
+          body: JSON.stringify({
+            target_type: "trip",
+            target_id: this.trip.id || this.tripId || "",
+            rating: this.tripFeedbackRating,
+            tags: [],
+            comment: this.tripFeedbackComment,
+          }),
+        });
+        this.tripFeedbackSubmitted = true;
+        this.toastMsg(
+          this.tripFeedbackRating <= 2
+            ? "反馈已提交，低分已进入优化池"
+            : "反馈已提交"
+        );
+      } finally {
+        this.tripFeedbackSaving = false;
+      }
     },
     async loadLiveAlerts() {
       if (!this.tripId) {
@@ -1098,6 +1129,11 @@ createApp({
               this.chatLog.splice(this.chatLog.length - 1, 1, { ...last });
             } else if (ev.done) {
               this.taskRunning = false;
+              if (ev.trip_id && ev.trip_id !== this.tripId) {
+                this.tripFeedbackRating = 0;
+                this.tripFeedbackComment = "";
+                this.tripFeedbackSubmitted = false;
+              }
               this.trip = ev.itinerary;
               this.tripId = ev.trip_id || this.tripId;
               this.tripSource = "create";
@@ -1135,6 +1171,9 @@ createApp({
       this.tripId = "";
       this.trip = null;
       this.tripSource = "";
+      this.tripFeedbackRating = 0;
+      this.tripFeedbackComment = "";
+      this.tripFeedbackSubmitted = false;
       this.dayPage = 1;
       this.dayPages = 1;
       this.liveAlerts = [];
@@ -1148,6 +1187,9 @@ createApp({
       this.trip = trip.itinerary;
       this.tripId = trip.id;
       this.tripSource = "open";
+      this.tripFeedbackRating = 0;
+      this.tripFeedbackComment = "";
+      this.tripFeedbackSubmitted = false;
       await this.setDayPagination(trip.itinerary);
       this.view = "plan";
       this.chatLog = [
@@ -1624,6 +1666,29 @@ createApp({
                   门票 ¥{{ trip.budget.attractions }} + 餐饮 ¥{{ trip.budget.dining }} + 交通 ¥{{ trip.budget.transport }}
                 </div>
               </div>
+              <div class="trip-feedback">
+                <div class="panel-head">
+                  <h4>这次行程怎么样？</h4>
+                  <span v-if="tripFeedbackSubmitted" class="small success-text">已提交，感谢反馈</span>
+                </div>
+                <div class="feedback-stars">
+                  <button
+                    v-for="star in [1,2,3,4,5]"
+                    :key="star"
+                    type="button"
+                    :disabled="tripFeedbackSubmitted"
+                    :class="{active: star <= tripFeedbackRating}"
+                    @click="tripFeedbackRating = star"
+                  >★</button>
+                  <span class="small muted">{{ tripFeedbackRating ? tripFeedbackRating + ' 星' : '点击评分' }}</span>
+                </div>
+                <div v-if="!tripFeedbackSubmitted" class="feedback-compose">
+                  <input v-model="tripFeedbackComment" placeholder="哪里好用、哪里不准，写一句就行" />
+                  <button class="btn sm primary" :disabled="!tripFeedbackRating || tripFeedbackSaving" @click="submitTripFeedback">
+                    {{ tripFeedbackSaving ? "提交中..." : "提交反馈" }}
+                  </button>
+                </div>
+              </div>
               <div v-if="trip.practical_tips && trip.practical_tips.length" class="tips-block">
                 <h4>实用信息</h4>
                 <div v-for="tip in trip.practical_tips" :key="tip" class="small muted" style="padding:2px 0">{{ tip }}</div>
@@ -2006,6 +2071,12 @@ createApp({
               <div class="metric"><div class="label">Token</div><div class="value">{{ (metrics.total_tokens || 0).toLocaleString() }}</div></div>
               <div class="metric"><div class="label">估算成本</div><div class="value">¥{{ Number(metrics.estimated_cost_yuan || 0).toFixed(4) }}</div></div>
             </div>
+            <div v-if="metrics" class="metric-row cols-4">
+              <div class="metric"><div class="label">运行次数</div><div class="value">{{ metrics.request_count || 0 }}</div></div>
+              <div class="metric"><div class="label">用户平均满意度</div><div class="value">{{ Number(metrics.feedback_avg_rating || 0).toFixed(1) }} / 5</div></div>
+              <div class="metric"><div class="label">低分反馈</div><div class="value">{{ metrics.feedback_low_rating || 0 }}</div></div>
+              <div class="metric"><div class="label">待修复样本</div><div class="value">{{ evalFailureSummary.open || 0 }}</div></div>
+            </div>
 
             <div class="grid cols-2 dashboard-panels">
               <section class="card">
@@ -2042,6 +2113,25 @@ createApp({
                 </div>
               </section>
             </div>
+
+            <section class="card dashboard-section">
+              <div class="panel-head">
+                <h3>最新用户反馈</h3>
+                <span class="small muted">共 {{ metrics ? metrics.feedback_total : 0 }} 条</span>
+              </div>
+              <div v-if="adminFeedback.length" class="table-scroll">
+                <table class="table">
+                  <tr><th>评分</th><th>对象</th><th>反馈</th><th>时间</th></tr>
+                  <tr v-for="item in adminFeedback" :key="item.id">
+                    <td><b>{{ item.rating }} / 5</b></td>
+                    <td>{{ item.target_type }} · {{ item.target_id || '-' }}</td>
+                    <td class="small">{{ item.comment || '未填写文字反馈' }}</td>
+                    <td class="small">{{ formatSubmitTime(item.created_at) }}</td>
+                  </tr>
+                </table>
+              </div>
+              <div v-else class="empty compact">暂无用户反馈</div>
+            </section>
 
             <section class="card dashboard-section">
               <div class="panel-head">

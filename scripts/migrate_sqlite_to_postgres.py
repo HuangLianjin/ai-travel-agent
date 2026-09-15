@@ -37,6 +37,7 @@ TABLES = [
     "verification_codes",
     "recommend_slots",
     "agent_runs",
+    "user_feedback",
     "place_prices",
     "price_feedback",
 ]
@@ -67,6 +68,12 @@ def main() -> None:
     dst.init_db()
 
     for table in TABLES:
+        source_table = src.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        if not source_table:
+            continue
         src_cols = [
             row["name"]
             for row in src.execute(f"PRAGMA table_info({table})").fetchall()
@@ -94,6 +101,11 @@ def main() -> None:
     print("\n=== 行数对比 ===")
     mismatched = 0
     for table in TABLES:
+        if not src.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone():
+            continue
         n_src = src.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         n_dst = int(dst.query_one(f"SELECT COUNT(*) AS n FROM {table}")["n"])
         status = "OK" if n_src == n_dst else "DIFF"

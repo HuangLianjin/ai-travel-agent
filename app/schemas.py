@@ -88,6 +88,14 @@ class EvalFailureUpdate(BaseModel):
     note: str = Field(default="", max_length=1000)
 
 
+class UserFeedbackCreate(BaseModel):
+    target_type: str = Field(default="trip", max_length=40)
+    target_id: str = Field(default="", max_length=120)
+    rating: int = Field(ge=1, le=5)
+    tags: list[str] = []
+    comment: str = Field(default="", max_length=2000)
+
+
 class ProfileUpdate(BaseModel):
     nickname: str = Field(default="", max_length=40)
     avatar: str = Field(default="", max_length=500)

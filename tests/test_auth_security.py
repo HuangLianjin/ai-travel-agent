@@ -39,6 +39,7 @@ TEST_TABLES = [
     "recommend_slots",
     "agent_runs",
     "eval_failures",
+    "user_feedback",
     "place_prices",
     "price_feedback",
 ]
@@ -253,6 +254,38 @@ def test_eval_failure_reflow_lifecycle(db):
     assert summary["by_failure_type"]["keyword_missing"] == 1
 
 
+def test_user_feedback_low_rating_enters_optimization_pool(db):
+    user_id = db.create_user(
+        "feedback_user",
+        "Travel2026",
+        email="feedback@example.com",
+        email_verified=1,
+    )
+
+    feedback_id, low_score = db.save_user_feedback(
+        user_id=user_id,
+        target_type="trip",
+        target_id="trip_1",
+        rating=2,
+        tags=["路线太赶"],
+        comment="第二天的交通安排不合理",
+    )
+
+    assert feedback_id > 0
+    assert low_score is True
+    feedback = db.list_user_feedback(user_id=user_id, limit=10)
+    assert feedback[0]["rating"] == 2
+    assert feedback[0]["tags"] == ["路线太赶"]
+    failures = db.list_eval_failures(status="open")
+    assert len(failures) == 1
+    assert failures[0]["case_id"] == "trip_1"
+    assert failures[0]["failure_types"] == ["user_low_rating"]
+    summary = db.user_feedback_summary(days=30)
+    assert summary["total"] == 1
+    assert summary["avg_rating"] == 2.0
+    assert summary["low_ratings"] == 1
+
+
 def test_admin_observability_endpoints_enforce_permissions(db):
     admin_id = db.create_user(
         "metrics_admin",
@@ -266,6 +299,14 @@ def test_admin_observability_endpoints_enforce_permissions(db):
         "Travel2026",
         email="metrics-reader@example.com",
         email_verified=1,
+    )
+    reader = db.get_user_by_username("metrics_reader")
+    feedback_trip_id = db.create_trip(
+        reader["id"],
+        "反馈测试行程",
+        "成都",
+        {"city": "成都", "days": 2},
+        {"city": "成都", "days": []},
     )
     db.save_eval_failures(
         "eval_api",
@@ -296,16 +337,34 @@ def test_admin_observability_endpoints_enforce_permissions(db):
         assert "estimated_cost_yuan" in metrics_response.json()
         assert "by_intent" in metrics_response.json()
 
+        feedback_response = client.post(
+            "/api/feedback",
+            headers=reader_headers,
+            json={
+                "target_type": "trip",
+                "target_id": feedback_trip_id,
+                "rating": 2,
+                "tags": ["行程太赶"],
+                "comment": "希望减少景点",
+            },
+        )
+        assert feedback_response.status_code == 200
+        assert feedback_response.json()["added_to_optimization"] is True
+
+        admin_feedback = client.get("/api/admin/feedback", headers=admin_headers)
+        assert admin_feedback.status_code == 200
+        assert admin_feedback.json()[0]["rating"] == 2
+
         failures_response = client.get(
             "/api/admin/eval-failures?status=open",
             headers=admin_headers,
         )
         assert failures_response.status_code == 200
         failures = failures_response.json()["items"]
-        assert failures[0]["case_id"] == "api_case"
+        api_failure = next(item for item in failures if item["case_id"] == "api_case")
 
         fixed_response = client.post(
-            f"/api/admin/eval-failures/{failures[0]['id']}/status",
+            f"/api/admin/eval-failures/{api_failure['id']}/status",
             headers=admin_headers,
             json={"status": "fixed", "note": "已修复"},
         )

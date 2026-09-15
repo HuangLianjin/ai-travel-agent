@@ -259,6 +259,34 @@ button { cursor: pointer; }
   color: #1e3a8a;
   font-weight: 600;
 }
+.trip-feedback {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.trip-feedback h4 { margin: 0; font-size: 14px; }
+.feedback-stars { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+.feedback-stars button {
+  border: 0;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 24px;
+  line-height: 1;
+  padding: 0;
+}
+.feedback-stars button.active { color: #eab308; }
+.feedback-compose { display: flex; gap: 8px; }
+.feedback-compose input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: white;
+}
+.success-text { color: var(--ok); }
 .metric-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -379,6 +407,7 @@ button { cursor: pointer; }
   .guide-layout { grid-template-columns: 1fr; }
   .dashboard-head { align-items: flex-start; flex-direction: column; }
   .status-summary { grid-template-columns: 1fr; }
+  .feedback-compose { flex-direction: column; }
   .plan-layout { flex-direction: column; height: calc(100vh - 180px); }
   .plan-layout > .card { min-height: 0; overflow-y: auto; }
   .plan-layout > .chat-panel { min-height: 0; overflow: hidden; }
