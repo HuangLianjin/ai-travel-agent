@@ -19,7 +19,7 @@ AI 旅行规划平台（可在线演示）
 景点/美食/交通/路线/反思子 Agent 并行执行，
 支持流式输出、多轮局部调整与版本化。
 
-技术栈：Python、FastAPI、LangGraph、SQLite、RAG、SSE、
+技术栈：Python、FastAPI、LangGraph、PostgreSQL、RAG、SSE、
 高德地图 API、和风天气、Tavily/SerpAPI、Docker、GitHub Actions
 ```
 

@@ -10,7 +10,7 @@
 |---|---|---|
 | 上线地址 | 仅本地 127.0.0.1:8000 | 云服务器 + HTTPS 在线地址 |
 | 真实用户 | 只有演示账号和测试账号 | 100+ 内测用户、注册/验证/反馈闭环 |
-| 存储 | SQLite 单机文件 | PostgreSQL + 自动备份 |
+| 存储 | ~~SQLite 单机文件~~ | PostgreSQL + 自动备份（已完成） |
 | 安全合规 | 用户名密码、无内容审核 | 邮箱验证、内容安全、隐私协议、账号注销 |
 | 交易闭环 | 无支付、无订单 | 会员/Token 包/酒店门票交易 |
 | 搜索/LLM | 免费 Key，额度低 | 付费额度 + 用户配额 + 成本告警 |
@@ -48,36 +48,20 @@ P4 企业级      持续    多租户 + 可观测 + 高可用
 - 健康检查 `/api/health` 返回 200
 - 重启后数据不丢
 
-### 3.2 SQLite 升级 PostgreSQL
+### 3.2 SQLite 升级 PostgreSQL（已完成）
 
-当前 `app/db.py` 直接使用 sqlite3，改造成本最高，分三步：
+存储层已切换为 PostgreSQL：
 
-```text
-第一步：抽出 Storage 接口
-  新增 app/storage/base.py
-  定义 init/query/execute/migrate
-
-第二步：PostgreSQL 实现
-  新增 app/storage/postgres.py
-  使用 psycopg 或 SQLAlchemy
-  保留 SQLite 作为本地开发模式
-
-第三步：数据迁移
-  编写 scripts/migrate_sqlite_to_postgres.py
-  把 users/trips/conversations/guides/reviews/agent_runs 全量迁移
-  迁移前备份 SQLite，迁移后做行数对比
-```
+- `app/db.py`：psycopg 连接池，通过 `DATABASE_URL` 配置。
+- `docker-compose.yml`：内置 `postgres:16` 服务与数据卷，app 依赖 db 健康检查。
+- 测试：pytest 连 PostgreSQL 测试库，CI 内置 Postgres 服务。
+- 存量迁移：`scripts/migrate_sqlite_to_postgres.py`，迁移后自动做行数对比并推进自增序列。
+- 备份：`scripts/backup_data.py` 使用 `pg_dump` + 上传文件打包，保留最近 14 份。
 
 推荐：
 
 - 内测：Neon 免费 PostgreSQL
 - 正式：云数据库 PostgreSQL（腾讯云/阿里云/RDS）
-
-验收：
-
-- 所有接口在 PostgreSQL 模式下通过
-- 迁移后行数一致
-- SQLite 模式仍可作为本地开发回退
 
 ### 3.3 备份
 

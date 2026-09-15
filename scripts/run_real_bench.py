@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
@@ -14,6 +13,8 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from app.config import get_settings  # noqa: E402
+from app.db import Database  # noqa: E402
 from app.security import hash_password  # noqa: E402
 
 BASE = "http://127.0.0.1:8000/api"
@@ -62,29 +63,24 @@ PROMPTS = [
 ]
 
 
-def ensure_user(db_path: str, username: str, password: str, phone: str) -> int:
-    con = sqlite3.connect(db_path)
+def ensure_user(dsn: str, username: str, password: str, phone: str) -> int:
+    db = Database(dsn)
     try:
-        row = con.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-        if row:
-            return int(row[0])
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        cur = con.execute(
-            "INSERT INTO users (username, password_hash, role, status, created_at, phone, phone_verified) "
-            "VALUES (?, ?, 'user', 'active', ?, ?, 1)",
-            (username, hash_password(password), now, phone),
+        row = db.query_one(
+            "SELECT id FROM users WHERE username = %s", (username,)
         )
-        con.commit()
-        return int(cur.lastrowid)
+        if row:
+            return int(row["id"])
+        return db.create_user(username, password, phone=phone, phone_verified=1)
     finally:
-        con.close()
+        db.close()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument("--output", default="data/bench_results.json")
-    parser.add_argument("--db", default=str(ROOT / "data" / "travel.db"))
+    parser.add_argument("--dsn", default=os.getenv("DATABASE_URL", ""))
     args = parser.parse_args()
 
     suffix = str(int(time.time()))[-6:]
@@ -93,7 +89,7 @@ def main() -> None:
     phone = f"139{suffix}0001"
     client = httpx.Client(timeout=300)
 
-    ensure_user(args.db, username, password, phone)
+    ensure_user(args.dsn or get_settings().db_dsn, username, password, phone)
     login = client.post(f"{BASE}/auth/login", json={"username": username, "password": password})
     if login.status_code != 200:
         print("login failed", login.status_code, login.text)

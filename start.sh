@@ -21,10 +21,8 @@ fi
 
 PYTHON=".venv/bin/python"
 
-if [ ! -f "data/travel.db" ]; then
-  echo "[start] seeding demo data..."
-  "$PYTHON" -m app.seed
-fi
+echo "[start] initializing PostgreSQL schema / demo data (ensure DATABASE_URL is reachable)..."
+"$PYTHON" -m app.seed
 
 echo "[start] serving at http://127.0.0.1:8000"
 "$PYTHON" -m uvicorn app.main:app --host 127.0.0.1 --port 8000

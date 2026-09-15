@@ -1,22 +1,26 @@
-"""根据 agent_runs 生成可写入简历的运行指标报告。"""
+"""根据 agent_runs 生成可写入简历的运行指标报告（PostgreSQL）。"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from app.config import get_settings  # noqa: E402
+from app.db import Database  # noqa: E402
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="生成 Agent 运行指标报告")
-    parser.add_argument("--db", default=os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "travel.db")))
+    parser.add_argument("--dsn", default=os.getenv("DATABASE_URL", ""), help="PostgreSQL 连接串")
     parser.add_argument("--user-id", type=int, default=None, help="只统计指定用户的运行记录")
-    parser.add_argument("--output", default=str(PROJECT_ROOT / "data" / "usage_report.json"))
+    parser.add_argument("--output", default=str(ROOT / "data" / "usage_report.json"))
     parser.add_argument(
         "--input-price-per-1m",
         type=float,
@@ -31,16 +35,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    con = sqlite3.connect(args.db)
-    con.row_factory = sqlite3.Row
-    where = " WHERE user_id = ?" if args.user_id is not None else ""
+    dsn = args.dsn or get_settings().db_dsn
+    db = Database(dsn)
+    where = " WHERE user_id = %s" if args.user_id is not None else ""
     params = (args.user_id,) if args.user_id is not None else ()
-    rows = con.execute(
+    rows = db.query_all(
         "SELECT intent, status, prompt_tokens, completion_tokens, latency_ms, created_at "
         "FROM agent_runs" + where + " ORDER BY created_at ASC",
         params,
-    ).fetchall()
-    con.close()
+    )
+    db.close()
 
     total = len(rows)
     success = sum(1 for r in rows if r["status"] == "success")

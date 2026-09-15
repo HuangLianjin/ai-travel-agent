@@ -173,8 +173,8 @@
 
 ### D1 架构
 
-- 建议演进：FastAPI + LangGraph + SQLite -> PostgreSQL + Redis + 对象存储。
-- SQLite 保留单机演示，新增 `data_source=sqlite/postgres` 配置。
+- 已完成：FastAPI + LangGraph + PostgreSQL；下一步是 Redis 缓存 + 对象存储。
+- SQLite 存量数据可用 `scripts/migrate_sqlite_to_postgres.py` 迁移，本地测试连 PostgreSQL 测试库。
 - 上传文件从本地目录迁移到对象存储，或至少做目录隔离与防盗链。
 - 新增任务队列（Redis + 简单 worker），处理抓取、天气刷新、价格校验、PDF 生成。
 
@@ -269,7 +269,7 @@
 | 抓取内容版权风险 | 只摘要不搬运，保留来源，遵守 robots |
 | 价格不实时 | 标注更新时间与“以平台实际为准”，关键价格走官方/开放接口 |
 | 大模型输出不稳定 | Validator + 反思重试 + 结构化 schema + 人工复核兜底 |
-| 并发量上来后 SQLite 撑不住 | 保留 SQLite 演示模式，生产切 Postgres + Redis |
+| 并发量上来后 SQLite 撑不住 | 已切换 PostgreSQL 连接池，下一步接 Redis 缓存 |
 | 功能膨胀导致项目失控 | 按 P0-P3 分期，每期有验收指标，不做一次性大重构 |
 
 

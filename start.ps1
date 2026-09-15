@@ -17,10 +17,8 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 
 $python = ".venv\Scripts\python.exe"
 
-if (-not (Test-Path "data\travel.db")) {
-  Write-Host "[start] 正在初始化演示数据..."
-  & $python -m app.seed
-}
+Write-Host "[start] 正在初始化数据库结构/演示数据（需要 PostgreSQL 已启动，见 .env 的 DATABASE_URL）..."
+& $python -m app.seed
 
 Write-Host "[start] 启动服务: http://127.0.0.1:8000"
 & $python -m uvicorn app.main:app --host 127.0.0.1 --port 8000

@@ -13,7 +13,7 @@ from app.db import Database
 def main() -> None:
     settings = get_settings()
     Path(settings.db_dir).mkdir(parents=True, exist_ok=True)
-    db = Database(settings.db_path)
+    db = Database(settings.db_dsn)
     db.init_db()
     user = db.get_user_by_username("demo")
     if not user:
@@ -24,7 +24,7 @@ def main() -> None:
         for doc in build_docs():
             title = doc.get("title") or doc.get("name", "攻略")
             existing = db.query_one(
-                "SELECT id FROM guides WHERE title = ?", (title,)
+                "SELECT id FROM guides WHERE title = %s", (title,)
             )
             if existing:
                 continue
@@ -43,4 +43,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

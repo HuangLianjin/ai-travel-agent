@@ -39,6 +39,12 @@ class Settings:
     secret_key: str = os.getenv("SECRET_KEY", "travel-agent-dev-secret")
     token_ttl_hours: int = int(os.getenv("TOKEN_TTL_HOURS", "24"))
 
+    # 数据库连接串；db_path 仅用于确定上传文件目录
+    db_dsn: str = (
+        os.getenv("DATABASE_URL")
+        or os.getenv("DB_DSN")
+        or "postgresql://travel:travel@127.0.0.1:5432/travel"
+    )
     db_path: str = os.getenv(
         "DB_PATH", str(PROJECT_ROOT / "data" / "travel.db")
     )
@@ -52,6 +58,12 @@ class Settings:
         "OPENAI_BASE_URL", "https://api.openai.com/v1"
     )
     model_name: str = os.getenv("MODEL_NAME", "gpt-4o-mini")
+    llm_input_price_per_1m: float = float(
+        os.getenv("LLM_INPUT_PRICE_PER_1M", "2.0")
+    )
+    llm_output_price_per_1m: float = float(
+        os.getenv("LLM_OUTPUT_PRICE_PER_1M", "8.0")
+    )
 
     search_provider: str = os.getenv("SEARCH_PROVIDER", "auto")
     tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")

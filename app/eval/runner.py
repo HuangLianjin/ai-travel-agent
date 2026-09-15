@@ -6,10 +6,12 @@ import argparse
 import asyncio
 import json
 import time
+import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.agent.agents.main_agent import MainAgent
+from app.config import get_settings
 from app.eval.cases import load_cases
 from app.observability.metrics import metrics
 from app.rag.search import HybridSearcher
@@ -20,6 +22,12 @@ from app.services.planner import (
     extract_params,
     format_reply,
 )
+
+if TYPE_CHECKING:
+    from app.db import Database
+
+
+LOW_SCORE_THRESHOLD = 0.75
 
 
 def _eval_one(case, searcher: HybridSearcher) -> dict[str, Any]:
@@ -104,6 +112,7 @@ def _eval_one(case, searcher: HybridSearcher) -> dict[str, Any]:
         "quality_failures": quality_failures,
         "intent": intent,
         "city": params.get("city"),
+        "input_text": case.input_text,
         "latency_ms": elapsed,
     }
 
@@ -141,10 +150,46 @@ async def _eval_main_agent(case, main_agent: MainAgent) -> dict[str, Any]:
         "failure_types": failures,
         "intent": intent,
         "subtasks": subtask_types,
+        "input_text": case.input_text,
+        "city": case.expected_city,
     }
 
 
-async def run_demo_eval(cases=None) -> dict[str, Any]:
+def _low_score_records(report: dict[str, Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for result in report.get("cases") or []:
+        quality_score = float(result.get("quality_score") or 0)
+        if result.get("passed") and quality_score > LOW_SCORE_THRESHOLD:
+            continue
+        records.append(
+            {
+                **result,
+                "quality_score": quality_score,
+            }
+        )
+    for result in (report.get("main_agent") or {}).get("cases") or []:
+        if result.get("passed"):
+            continue
+        records.append(
+            {
+                **result,
+                "quality_score": 0,
+            }
+        )
+    return records
+
+
+def _persist_low_scores(db: "Database", report: dict[str, Any]) -> int:
+    return db.save_eval_failures(
+        report["eval_run_id"],
+        _low_score_records(report),
+    )
+
+
+async def run_demo_eval(
+    cases=None,
+    db: "Database | None" = None,
+) -> dict[str, Any]:
     cases = cases or load_cases()
     searcher = HybridSearcher()
     results = [_eval_one(case, searcher) for case in cases]
@@ -160,7 +205,8 @@ async def run_demo_eval(cases=None) -> dict[str, Any]:
         for qf in r.get("quality_failures", []):
             quality_failures[qf] = quality_failures.get(qf, 0) + 1
     quality_scores = [r.get("quality_score", 0) for r in results]
-    return {
+    report = {
+        "eval_run_id": uuid.uuid4().hex[:16],
         "total": total,
         "passed": passed,
         "pass_rate": round(passed / total, 4) if total else 0.0,
@@ -183,14 +229,25 @@ async def run_demo_eval(cases=None) -> dict[str, Any]:
             else 0.0,
             "cases": main_results,
         },
+        "low_score_threshold": LOW_SCORE_THRESHOLD,
     }
+    report["low_score_count"] = len(_low_score_records(report))
+    report["persisted_failures"] = _persist_low_scores(db, report) if db else 0
+    return report
 
 
 def main() -> None:
+    from app.db import Database
+
     parser = argparse.ArgumentParser(description="星旅 Agent 离线评测")
     parser.add_argument("--output", default="data/eval_report.json")
     args = parser.parse_args()
-    report = asyncio.run(run_demo_eval())
+    db = Database(get_settings().db_dsn)
+    db.init_db()
+    try:
+        report = asyncio.run(run_demo_eval(db=db))
+    finally:
+        db.close()
     path = Path(args.output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

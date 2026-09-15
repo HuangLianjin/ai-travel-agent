@@ -35,6 +35,7 @@ from app.schemas import (
     ChatRequest,
     CommentCreate,
     DepartureDateUpdate,
+    EvalFailureUpdate,
     FollowUpdate,
     ForgotPasswordRequest,
     GuideCreate,
@@ -802,7 +803,7 @@ async def chat_status(
         return {"status": "", "run_id": ""}
     row = db.query_one(
         "SELECT run_id, status, user_input FROM agent_runs "
-        "WHERE session_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1",
+        "WHERE session_id = %s AND user_id = %s ORDER BY created_at DESC LIMIT 1",
         (session_id, user["id"]),
     )
     if not row:
@@ -1053,7 +1054,7 @@ async def list_guides(
     )
     for item in data.get("items", []) or []:
         author = db.query_one(
-            "SELECT username, nickname, avatar FROM users WHERE id = ?",
+            "SELECT username, nickname, avatar FROM users WHERE id = %s",
             (item.get("user_id"),),
         )
         if author:
@@ -1193,7 +1194,7 @@ async def get_guide(
     if not guide:
         raise HTTPException(status_code=404, detail="攻略不存在")
     author = db.query_one(
-        "SELECT username, nickname, avatar FROM users WHERE id = ?",
+        "SELECT username, nickname, avatar FROM users WHERE id = %s",
         (guide.get("user_id"),),
     )
     if author:
@@ -1318,7 +1319,7 @@ async def admin_guides(
     )
     for item in data.get("items") or []:
         author = db.query_one(
-            "SELECT username, nickname, avatar FROM users WHERE id = ?",
+            "SELECT username, nickname, avatar FROM users WHERE id = %s",
             (item.get("user_id"),),
         )
         if author:
@@ -1434,7 +1435,7 @@ async def decide_review(
     updated = db.decide_review(review_id, req.status, req.note, user["id"])
     if not updated:
         raise HTTPException(status_code=404, detail="审核任务不存在或已处理")
-    review = db.query_one("SELECT * FROM reviews WHERE id = ?", (review_id,))
+    review = db.query_one("SELECT * FROM reviews WHERE id = %s", (review_id,))
     if review and review["target_type"] == "guide":
         db.update_guide_status(review["target_id"], req.status, req.note)
     elif review and review["target_type"] == "trip":
@@ -1539,11 +1540,19 @@ async def admin_set_recommend_slot(
 
 @router.get("/metrics")
 async def get_metrics(
+    days: int = 7,
     db: Database = Depends(get_db),
     user: dict = Depends(require_role("admin", "super_admin")),
 ):
+    days = max(1, min(365, days))
+    settings = get_settings()
     snapshot = metrics.snapshot()
-    runs = db.agent_run_summary()
+    runs = db.agent_run_summary(
+        days=days,
+        input_price_per_1m=settings.llm_input_price_per_1m,
+        output_price_per_1m=settings.llm_output_price_per_1m,
+    )
+    snapshot["days"] = days
     snapshot["request_count"] = runs["total_runs"]
     snapshot["success_count"] = runs["success_runs"]
     snapshot["failure_count"] = runs["failed_runs"]
@@ -1553,6 +1562,17 @@ async def get_metrics(
     snapshot["prompt_tokens"] = runs["prompt_tokens"]
     snapshot["completion_tokens"] = runs["completion_tokens"]
     snapshot["total_tokens"] = runs["total_tokens"]
+    snapshot["estimated_cost_yuan"] = runs["estimated_cost_yuan"]
+    snapshot["input_price_per_1m"] = runs["input_price_per_1m"]
+    snapshot["output_price_per_1m"] = runs["output_price_per_1m"]
+    snapshot["by_intent"] = {
+        str(row.get("intent") or "unknown"): int(row.get("n") or 0)
+        for row in runs["by_intent"]
+    }
+    snapshot["by_status"] = {
+        str(row.get("status") or "unknown"): int(row.get("n") or 0)
+        for row in runs["by_status"]
+    }
     return snapshot
 
 
@@ -1582,21 +1602,79 @@ async def admin_runs(
 
 @router.get("/admin/stats")
 async def admin_stats(
+    days: int = 7,
     db: Database = Depends(get_db),
     user: dict = Depends(require_role("admin", "super_admin")),
 ):
+    days = max(1, min(365, days))
+    settings = get_settings()
     return {
-        "runs": db.agent_run_summary(),
+        "runs": db.agent_run_summary(
+            days=days,
+            input_price_per_1m=settings.llm_input_price_per_1m,
+            output_price_per_1m=settings.llm_output_price_per_1m,
+        ),
         "metrics": metrics.snapshot(),
     }
 
 
+@router.get("/admin/eval-failures")
+async def admin_eval_failures(
+    status: str | None = "open",
+    limit: int = 100,
+    offset: int = 0,
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    if status not in (None, "", "open", "fixed"):
+        raise HTTPException(status_code=400, detail="无效的样本状态")
+    status = status or None
+    limit = max(1, min(200, limit))
+    offset = max(0, offset)
+    return {
+        "items": db.list_eval_failures(
+            status=status,
+            limit=limit,
+            offset=offset,
+        ),
+        "summary": db.eval_failure_summary(),
+    }
+
+
+@router.post("/admin/eval-failures/{failure_id}/status")
+async def admin_update_eval_failure(
+    failure_id: int,
+    req: EvalFailureUpdate,
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    failure = db.update_eval_failure_status(
+        failure_id,
+        req.status,
+        req.note,
+        user["id"],
+    )
+    if not failure:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    audit(
+        db,
+        user["id"],
+        f"eval_failure_{req.status}",
+        "eval_failure",
+        str(failure_id),
+        req.note,
+    )
+    return failure
+
+
 @router.get("/eval/run")
-async def run_eval(user: dict = Depends(require_role("admin", "super_admin"))):
-    return await run_demo_eval()
+async def run_eval(
+    db: Database = Depends(get_db),
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    return await run_demo_eval(db=db)
 
 
 @router.get("/health")
 async def health():
     return {"status": "ok", "app": "ai-travel-agent"}
-

@@ -148,7 +148,10 @@ createApp({
       priceFeedback: [],
       priceDraft: { place_name: "", city: "", price: "", source: "人工维护", source_url: "", note: "" },
       metrics: null,
+      metricsDays: 7,
       agentRuns: [],
+      evalFailures: [],
+      evalFailureSummary: {},
       adminGuides: [],
       adminGuidePage: 1,
       adminGuidePages: 1,
@@ -167,6 +170,15 @@ createApp({
     },
     currentUserText() {
       return this.user ? `${this.user.username} · ${this.user.role}` : "";
+    },
+    intentRows() {
+      const counts = (this.metrics && this.metrics.by_intent) || {};
+      return Object.entries(counts)
+        .map(([intent, count]) => ({ intent, count: Number(count) || 0 }))
+        .sort((a, b) => b.count - a.count);
+    },
+    intentMax() {
+      return Math.max(1, ...this.intentRows.map((item) => item.count));
     },
     currentDay() {
       if (!this.trip || !this.trip.days || !this.trip.days.length) return null;
@@ -762,12 +774,49 @@ createApp({
       this.toastMsg(status === "approved" ? "反馈已采用" : "反馈已驳回");
     },
     async loadMetrics() {
-      const [m, runs] = await Promise.all([
-        request("/metrics"),
+      const [m, runs, failures] = await Promise.all([
+        request(`/metrics?days=${this.metricsDays}`),
         request("/admin/runs?page=1&page_size=20"),
+        request("/admin/eval-failures?status=open&limit=100"),
       ]);
       this.metrics = m;
       this.agentRuns = (runs && runs.items) || [];
+      this.evalFailures = (failures && failures.items) || [];
+      this.evalFailureSummary = (failures && failures.summary) || {};
+    },
+    async setMetricsDays(days) {
+      this.metricsDays = days;
+      await this.loadMetrics();
+    },
+    intentLabel(intent) {
+      return {
+        create: "行程创建",
+        adjust: "行程调整",
+        ask: "旅行问答",
+        chat: "日常对话",
+        unknown: "未识别",
+      }[intent] || intent;
+    },
+    statusLabel(status) {
+      return {
+        success: "成功",
+        failed: "失败",
+        running: "运行中",
+      }[status] || status;
+    },
+    statusCount(status) {
+      const counts = (this.metrics && this.metrics.by_status) || {};
+      return Number(counts[status] || 0);
+    },
+    async resolveEvalFailure(item) {
+      const note = prompt("修复说明（可留空）");
+      if (note === null) return;
+      await request(`/admin/eval-failures/${item.id}/status`, {
+        method: "POST",
+        body: JSON.stringify({ status: "fixed", note }),
+      });
+      await this.loadMetrics();
+      this.toastMsg("样本已标记为已修复");
     },
     async loadLiveAlerts() {
       if (!this.tripId) {
@@ -1340,6 +1389,7 @@ createApp({
     },
     async runEval() {
       this.evalReport = await request("/eval/run");
+      await this.loadMetrics();
       this.toastMsg("离线评测完成");
     },
   },
@@ -1933,41 +1983,118 @@ createApp({
             </div>
           </div>
 
-          <div v-else-if="view==='metrics'" class="card">
-            <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
-              <h3 style="margin:0">运行时指标</h3>
-              <button class="btn sm" @click="loadMetrics"><i data-lucide="refresh-cw"></i> 刷新</button>
-              <button class="btn sm" @click="runEval"><i data-lucide="flask-conical"></i> 运行评测</button>
+          <div v-else-if="view==='metrics'" class="dashboard-view">
+            <div class="dashboard-head">
+              <div>
+                <h3>Agent 运行大盘</h3>
+                <div class="small muted">统计窗口：近 {{ metricsDays }} 天</div>
+              </div>
+              <div class="dashboard-actions">
+                <div class="segmented">
+                  <button :class="{active: metricsDays===7}" @click="setMetricsDays(7)">7 天</button>
+                  <button :class="{active: metricsDays===30}" @click="setMetricsDays(30)">30 天</button>
+                  <button :class="{active: metricsDays===90}" @click="setMetricsDays(90)">90 天</button>
+                </div>
+                <button class="btn sm" @click="loadMetrics"><i data-lucide="refresh-cw"></i> 刷新</button>
+                <button class="btn sm primary" @click="runEval"><i data-lucide="flask-conical"></i> 运行评测</button>
+              </div>
             </div>
-            <div v-if="metrics" class="metric-row">
-              <div class="metric"><div class="label">请求成功率</div><div class="value">{{ (metrics.success_rate*100).toFixed(1) }}%</div></div>
+
+            <div v-if="metrics" class="metric-row cols-4">
+              <div class="metric"><div class="label">成功率</div><div class="value">{{ (metrics.success_rate*100).toFixed(1) }}%</div></div>
               <div class="metric"><div class="label">P95 延迟</div><div class="value">{{ metrics.p95_latency_ms }}ms</div></div>
-              <div class="metric"><div class="label">失败类型</div><div class="value">{{ Object.keys(metrics.failure_types||{}).length }}</div></div>
+              <div class="metric"><div class="label">Token</div><div class="value">{{ (metrics.total_tokens || 0).toLocaleString() }}</div></div>
+              <div class="metric"><div class="label">估算成本</div><div class="value">¥{{ Number(metrics.estimated_cost_yuan || 0).toFixed(4) }}</div></div>
             </div>
-            <pre v-if="metrics" class="small">{{ JSON.stringify(metrics, null, 2) }}</pre>
-            <div v-if="agentRuns && agentRuns.length">
-              <h4 style="margin:14px 0 8px">运行记录</h4>
-              <table class="table">
-                <tr><th>run_id</th><th>意图</th><th>状态</th><th>Token</th><th>耗时</th><th>时间</th></tr>
-                <tr v-for="r in agentRuns" :key="r.run_id">
-                  <td class="small">{{ r.run_id }}</td>
-                  <td>{{ r.intent }}</td>
-                  <td>{{ r.status }}</td>
-                  <td>{{ (r.prompt_tokens || 0) + (r.completion_tokens || 0) }}</td>
-                  <td>{{ r.latency_ms }}ms</td>
-                  <td class="small">{{ formatSubmitTime(r.created_at) }}</td>
-                </tr>
-              </table>
+
+            <div class="grid cols-2 dashboard-panels">
+              <section class="card">
+                <div class="panel-head">
+                  <h3>意图分布</h3>
+                  <span class="small muted">共 {{ metrics ? metrics.request_count : 0 }} 次运行</span>
+                </div>
+                <div v-if="intentRows.length" class="distribution">
+                  <div v-for="item in intentRows" :key="item.intent" class="distribution-row">
+                    <div class="distribution-label">
+                      <span>{{ intentLabel(item.intent) }}</span>
+                      <b>{{ item.count }}</b>
+                    </div>
+                    <div class="bar-track"><span :style="{ width: Math.round(item.count / intentMax * 100) + '%' }"></span></div>
+                  </div>
+                </div>
+                <div v-else class="empty compact">暂无运行数据</div>
+              </section>
+
+              <section class="card">
+                <div class="panel-head">
+                  <h3>运行状态</h3>
+                  <span class="small muted">失败 {{ metrics ? metrics.failure_count : 0 }} 次</span>
+                </div>
+                <div class="status-summary">
+                  <div v-for="status in ['success', 'failed', 'running']" :key="status">
+                    <span class="muted">{{ statusLabel(status) }}</span>
+                    <b>{{ statusCount(status) }}</b>
+                  </div>
+                </div>
+                <div v-if="metrics" class="pricing-note">
+                  <span>输入 ¥{{ Number(metrics.input_price_per_1m || 0).toFixed(2) }}/M</span>
+                  <span>输出 ¥{{ Number(metrics.output_price_per_1m || 0).toFixed(2) }}/M</span>
+                </div>
+              </section>
             </div>
-            <div v-if="evalReport">
-              <h4>评测结果</h4>
+
+            <section class="card dashboard-section">
+              <div class="panel-head">
+                <h3>低分样本回流</h3>
+                <span class="small muted">待修复 {{ evalFailureSummary.open || 0 }} · 已修复 {{ evalFailureSummary.fixed || 0 }}</span>
+              </div>
+              <div v-if="evalFailures.length" class="table-scroll">
+                <table class="table">
+                  <tr><th>样本</th><th>意图</th><th>失败原因</th><th>质量分</th><th>操作</th></tr>
+                  <tr v-for="item in evalFailures" :key="item.id">
+                    <td>
+                      <b>{{ item.title || item.case_id }}</b>
+                      <div class="small muted">{{ item.case_id }}</div>
+                    </td>
+                    <td>{{ intentLabel(item.intent) }}</td>
+                    <td class="small">{{ (item.failure_types || []).join('、') || (item.quality_failures || []).join('、') || '低质量分' }}</td>
+                    <td>{{ Number(item.quality_score || 0).toFixed(2) }}</td>
+                    <td><button class="btn sm" @click="resolveEvalFailure(item)"><i data-lucide="check"></i> 标记已修复</button></td>
+                  </tr>
+                </table>
+              </div>
+              <div v-else class="empty compact">暂无待修复样本</div>
+            </section>
+
+            <section v-if="evalReport" class="card dashboard-section">
+              <div class="panel-head">
+                <h3>最近一次评测</h3>
+                <span class="small muted">{{ evalReport.eval_run_id }}</span>
+              </div>
               <div class="metric-row">
                 <div class="metric"><div class="label">用例数</div><div class="value">{{ evalReport.total }}</div></div>
                 <div class="metric"><div class="label">通过率</div><div class="value">{{ (evalReport.pass_rate*100).toFixed(1) }}%</div></div>
-                <div class="metric"><div class="label">失败类型</div><div class="value">{{ Object.keys(evalReport.failure_types||{}).length }}</div></div>
+                <div class="metric"><div class="label">新增回流</div><div class="value">{{ evalReport.low_score_count }}</div></div>
               </div>
-              <pre class="small">{{ JSON.stringify(evalReport.failure_types, null, 2) }}</pre>
-            </div>
+            </section>
+
+            <section class="card dashboard-section">
+              <div class="panel-head"><h3>最近运行</h3></div>
+              <div v-if="agentRuns.length" class="table-scroll">
+                <table class="table">
+                  <tr><th>run_id</th><th>意图</th><th>状态</th><th>Token</th><th>耗时</th><th>时间</th></tr>
+                  <tr v-for="r in agentRuns" :key="r.run_id">
+                    <td class="small">{{ r.run_id }}</td>
+                    <td>{{ intentLabel(r.intent) }}</td>
+                    <td><span class="status" :class="r.status">{{ statusLabel(r.status) }}</span></td>
+                    <td>{{ (r.prompt_tokens || 0) + (r.completion_tokens || 0) }}</td>
+                    <td>{{ r.latency_ms }}ms</td>
+                    <td class="small">{{ formatSubmitTime(r.created_at) }}</td>
+                  </tr>
+                </table>
+              </div>
+              <div v-else class="empty compact">暂无运行记录</div>
+            </section>
           </div>
 
           <div v-else-if="view==='admin' && isAdmin" class="grid">

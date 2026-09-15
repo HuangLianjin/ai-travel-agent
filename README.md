@@ -17,16 +17,30 @@
 - 反思重试 + 预算强约束 + 来源约束
 - 流式输出、版本管理、人工审核、攻略广场、收藏、关注
 - 运行 trace：每次生成保存 token、耗时、状态、错误
+- 管理大盘：成功率、P95、Token、成本、意图分布
+- 评测回流：低分样本落库，可在管理后台标记修复并审计
 - 健康监控：每 5 分钟探活，失败时 PushPlus/企业微信推送告警
 - Docker + GitHub Actions CI + 离线评测
 
 ## 技术栈
 
-Python、FastAPI、LangGraph、SQLite、RAG、SSE、Vue 3、高德地图 API、和风天气、Tavily/SerpAPI、Docker、GitHub Actions
+Python、FastAPI、LangGraph、PostgreSQL、RAG、SSE、Vue 3、高德地图 API、和风天气、Tavily/SerpAPI、Docker、GitHub Actions
 
 ## 快速开始（一键启动）
 
+### 0. 启动 PostgreSQL
+
+本地开发先确保 PostgreSQL 可用，最简单的方式：
+
+```bash
+docker compose up -d db
+```
+
+`.env` 默认使用 `postgresql://travel:travel@127.0.0.1:5432/travel`，可按需修改 `DATABASE_URL`。
+
 Windows：
+
+
 
 ```powershell
 .\start.ps1
@@ -38,7 +52,7 @@ macOS / Linux：
 ./start.sh
 ```
 
-脚本会自动完成：复制 `.env.example` 为 `.env`、创建虚拟环境、安装依赖、初始化演示数据，然后启动服务。打开 http://localhost:8000 即可使用。
+脚本会自动完成：复制 `.env.example` 为 `.env`、创建虚拟环境、安装依赖、初始化 PostgreSQL 表结构与演示数据，然后启动服务（请先确保 PostgreSQL 已启动）。打开 http://localhost:8000 即可使用。
 
 默认不创建演示账号；需要体验演示账号时，在 `.env` 里设置 `DEMO_SEED_ENABLED=true`。
 
@@ -74,7 +88,7 @@ python -m pytest tests -q
 python -m app.eval.runner --output data/eval_report.json
 ```
 
-当前结果：pytest 11/11 通过；业务评测 24/24，主 Agent 评测 24/24。
+当前结果：pytest 21/21 通过；业务评测 24/24，主 Agent 评测 24/24。
 
 真实 40 城基准：40/40 成功，平均耗时 39.6s，P95 47.2s，总 Token 150,590，成本约 0.79 元。
 

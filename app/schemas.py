@@ -83,6 +83,11 @@ class ReviewDecision(BaseModel):
     note: str = ""
 
 
+class EvalFailureUpdate(BaseModel):
+    status: str = Field(default="fixed", pattern="^(open|fixed)$")
+    note: str = Field(default="", max_length=1000)
+
+
 class ProfileUpdate(BaseModel):
     nickname: str = Field(default="", max_length=40)
     avatar: str = Field(default="", max_length=500)

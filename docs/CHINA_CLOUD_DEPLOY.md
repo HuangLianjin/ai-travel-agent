@@ -51,6 +51,8 @@ cd /opt/ai-travel-agent
 docker compose up -d --build
 ```
 
+首次启动会自动拉起 PostgreSQL 服务（容器 `ai-travel-agent-db`，数据保存在 `pgdata` 卷），应用通过 `DATABASE_URL` 连接。
+
 ## 5. 访问
 
 ```text

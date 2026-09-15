@@ -35,11 +35,11 @@ logger = logging.getLogger("ai-travel-agent")
 async def lifespan(app: FastAPI):
     settings = get_settings()
     Path(settings.db_dir).mkdir(parents=True, exist_ok=True)
-    db = Database(settings.db_path)
+    db = Database(settings.db_dsn)
     db.init_db()
     app.state.db = db
     app.state.metrics = metrics
-    logger.info("星旅 Agent 启动完成: db=%s", settings.db_path)
+    logger.info("星旅 Agent 启动完成: database=postgresql")
     yield
     db.close()
 

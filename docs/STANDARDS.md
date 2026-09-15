@@ -11,7 +11,7 @@
 
 ## 2. 完整后端工程体系
 
-FastAPI + LangGraph + SQLite 分层实现，包含认证、RBAC、审计、限流、会话、版本化、静态前端服务。
+FastAPI + LangGraph + PostgreSQL 分层实现，包含认证、RBAC、审计、限流、会话、版本化、静态前端服务。
 
 证据：
 - `app/main.py`：应用生命周期

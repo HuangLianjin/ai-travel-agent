@@ -1,12 +1,13 @@
 """本地全流程冒烟 + 对抗性测试脚本。
 
-用法（需先启动测试服务）：
-  python scripts/manual_flow_test.py http://127.0.0.1:8010 data/flow-test.db
+用法（需先启动测试服务和 PostgreSQL）：
+  python scripts/manual_flow_test.py http://127.0.0.1:8010
+  或指定连接串：
+  python scripts/manual_flow_test.py http://127.0.0.1:8010 "postgresql://travel:travel@127.0.0.1:5432/travel"
 """
 
 from __future__ import annotations
 
-import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
@@ -23,12 +24,15 @@ try:
 except Exception:
     pass
 
-from app.security import generate_totp_secret, hash_password, totp_code  # noqa: E402
+from app.config import get_settings  # noqa: E402
+from app.db import Database  # noqa: E402
+from app.security import generate_totp_secret, totp_code  # noqa: E402
 
 
 def main() -> int:
     base = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8010"
-    db_path = Path(sys.argv[2] if len(sys.argv) > 2 else "data/flow-test.db")
+    dsn = sys.argv[2] if len(sys.argv) > 2 else get_settings().db_dsn
+    db = Database(dsn)
     client = httpx.Client(base_url=base, timeout=120)
     skip_chat = "--skip-chat" in sys.argv
     results: list[tuple[str, bool, str]] = []
@@ -38,30 +42,16 @@ def main() -> int:
         print(("PASS" if ok else "FAIL"), name, detail)
 
     def db_code(phone: str, purpose: str) -> str | None:
-        con = sqlite3.connect(db_path)
-        try:
-            row = con.execute(
-                "SELECT code FROM verification_codes "
-                "WHERE phone = ? AND purpose = ? AND used = 0 "
-                "ORDER BY id DESC LIMIT 1",
-                (phone, purpose),
-            ).fetchone()
-            return row[0] if row else None
-        finally:
-            con.close()
+        row = db.query_one(
+            "SELECT code FROM verification_codes "
+            "WHERE phone = %s AND purpose = %s AND used = 0 "
+            "ORDER BY id DESC LIMIT 1",
+            (phone, purpose),
+        )
+        return row["code"] if row else None
 
     def insert_user(username: str, password: str, phone: str, verified: int) -> None:
-        con = sqlite3.connect(db_path)
-        try:
-            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            con.execute(
-                "INSERT INTO users (username, password_hash, role, status, created_at, "
-                "phone, phone_verified) VALUES (?, ?, 'user', 'active', ?, ?, ?)",
-                (username, hash_password(password), now, phone, verified),
-            )
-            con.commit()
-        finally:
-            con.close()
+        db.create_user(username, password, phone=phone, phone_verified=verified)
 
     # 1. 健康检查
     r = client.get("/api/health")
@@ -263,6 +253,7 @@ def main() -> int:
     r = client.get("/api/admin/users", headers=admin_headers)
     check("super admin can list users", r.status_code == 200)
 
+    db.close()
     failed = [x for x in results if not x[1]]
     print(f"\nRESULT: {len(results) - len(failed)}/{len(results)} passed")
     return 1 if failed else 0
